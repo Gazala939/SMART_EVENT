@@ -1,5 +1,6 @@
+
 import { useEffect, useState } from "react";
-import axios from "axios";
+import api from "../api";
 import { useParams, useNavigate } from "react-router-dom";
 
 function EventDetails() {
@@ -12,23 +13,42 @@ function EventDetails() {
 
   const navigate = useNavigate();
 
+  // GET EVENT DETAILS
   useEffect(() => {
-    axios
-      .get(`http://127.0.0.1:8000/events/${event_id}`)
-      .then((response) => {
-        setEvent(response.data);
-        setLoading(false);
-      })
-      .catch((error) => {
-        console.log(error);
-        setLoading(false);
-      });
+    let cancelled = false;
+
+    const fetchEvent = async () => {
+      setLoading(true);
+
+      try {
+        const response = await api.get(`/events/${event_id}`);
+
+        if (!cancelled) {
+          setEvent(response.data);
+        }
+      } catch (error) {
+        console.error("Error fetching event:", error);
+
+        if (!cancelled) {
+          setEvent(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchEvent();
+
+    return () => {
+      cancelled = true;
+    };
   }, [event_id]);
 
+  // BOOK TICKETS
   const handleBooking = async () => {
     const token = localStorage.getItem("token");
-
-    console.log("Token:", token);
 
     if (!token) {
       alert("Please login to book tickets.");
@@ -39,18 +59,10 @@ function EventDetails() {
     try {
       setBookingLoading(true);
 
-      const response = await axios.post(
-        "http://127.0.0.1:8000/bookings",
-        {
-          event_id: Number(event_id),
-          ticket_quantity: quantity,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+      const response = await api.post("/bookings", {
+        event_id: Number(event_id),
+        ticket_quantity: quantity,
+      });
 
       alert("Booking successful!");
 
@@ -58,13 +70,12 @@ function EventDetails() {
         state: {
           booking: response.data,
           event: event,
-          ticket:response.data.ticket,
+          ticket: response.data.ticket,
         },
       });
     } catch (error) {
       alert(
-        error.response?.data?.detail ||
-          "Booking failed"
+        error.response?.data?.detail || "Booking failed"
       );
     } finally {
       setBookingLoading(false);
@@ -79,9 +90,16 @@ function EventDetails() {
     return <h2>Event not found</h2>;
   }
 
+  const status = event.event_status || "UPCOMING";
+  const statusClass = status.toLowerCase();
+
+  const canBook =
+    status !== "CANCELLED" &&
+    status !== "ONGOING" &&
+    status !== "COMPLETED";
+
   return (
     <div className="event-details">
-
       <button
         className="back-button"
         onClick={() => navigate("/home")}
@@ -98,6 +116,35 @@ function EventDetails() {
       )}
 
       <h1>{event.title}</h1>
+
+      {/* EVENT STATUS */}
+      <span className={`event-status ${statusClass}`}>
+        {status}
+      </span>
+
+      {/* CANCELLATION NOTICE */}
+      {status === "CANCELLED" && (
+        <div className="cancellation-notice">
+          <h3>Event Cancelled</h3>
+          <p>
+            This event has been cancelled. Ticket booking is
+            unavailable for this event.
+          </p>
+        </div>
+      )}
+
+      {status === "COMPLETED" && (
+        <p className="event-info-notice">
+          This event has already been completed.
+        </p>
+      )}
+
+      {status === "ONGOING" && (
+        <p className="event-info-notice">
+          This event is currently ongoing. Ticket booking is
+          unavailable.
+        </p>
+      )}
 
       <p>{event.description}</p>
 
@@ -118,49 +165,48 @@ function EventDetails() {
         ₹{event.ticket_price}
       </p>
 
-      <div className="booking-box">
+      {/* BOOKING SECTION */}
+      {canBook ? (
+        <div className="booking-box">
+          <h3>Book Tickets</h3>
 
-        <h3>Book Tickets</h3>
+          <label htmlFor="ticket-quantity">
+            Number of Tickets:
+          </label>
 
-        <label>
-          Number of Tickets:
-        </label>
+          <select
+            id="ticket-quantity"
+            value={quantity}
+            onChange={(e) =>
+              setQuantity(Number(e.target.value))
+            }
+          >
+            {Array.from({ length: 10 }, (_, index) => (
+              <option key={index + 1} value={index + 1}>
+                {index + 1}{" "}
+                {index === 0 ? "Ticket" : "Tickets"}
+              </option>
+            ))}
+          </select>
 
-        <select
-          value={quantity}
-          onChange={(e) =>
-            setQuantity(Number(e.target.value))
-          }
-        >
-          <option value={1}>1 Ticket</option>
-          <option value={2}>2 Tickets</option>
-          <option value={3}>3 Tickets</option>
-          <option value={4}>4 Tickets</option>
-          <option value={5}>5 Tickets</option>
-          <option value={6}>6 Tickets</option>
-          <option value={7}>7 Tickets</option>
-          <option value={8}>8 Tickets</option>
-          <option value={9}>9 Tickets</option>
-          <option value={10}>10 Tickets</option>
-        </select>
+          <p>
+            <strong>Total Price:</strong>{" "}
+            ₹{event.ticket_price * quantity}
+          </p>
 
-        <p>
-          <strong>Total Price:</strong>{" "}
-          ₹{event.ticket_price * quantity}
+          <button
+            className="book-button"
+            onClick={handleBooking}
+            disabled={bookingLoading}
+          >
+            {bookingLoading ? "Booking..." : "Book Tickets"}
+          </button>
+        </div>
+      ) : (
+        <p className="event-info-notice">
+          Booking is currently unavailable.
         </p>
-
-        <button
-          className="book-button"
-          onClick={handleBooking}
-          disabled={bookingLoading}
-        >
-          {bookingLoading
-            ? "Booking..."
-            : "Book Tickets"}
-        </button>
-
-      </div>
-
+      )}
     </div>
   );
 }

@@ -1,0 +1,102 @@
+
+.event-bookings-page {
+  max-width: 1200px;
+  margin: 40px auto;
+  padding: 32px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
+  color: #1e293b;
+  font-family: Arial, sans-serif;
+}
+
+.event-bookings-page h1 {
+  margin: 28px 0 12px;
+  font-size: 32px;
+  color: #172554;
+}
+
+.event-bookings-page p {
+  color: #64748b;
+  font-size: 15px;
+}
+
+.event-bookings-page h3 {
+  margin: 24px 0 18px;
+  color: #334155;
+  font-size: 20px;
+}
+
+.event-bookings-page button {
+  padding: 11px 18px;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.event-bookings-page button:hover {
+  background: #1d4ed8;
+}
+
+.event-bookings-page table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+.event-bookings-page thead {
+  background: #eff6ff;
+}
+
+.event-bookings-page th {
+  color: #1e40af;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.event-bookings-page th,
+.event-bookings-page td {
+  padding: 16px 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.event-bookings-page td {
+  font-size: 14px;
+  color: #334155;
+}
+
+.event-bookings-page tbody tr:hover {
+  background: #f8fafc;
+}
+
+.event-bookings-page tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.event-bookings-page td:nth-child(5) {
+  color: #15803d;
+  font-weight: 700;
+}
+
+@media (max-width: 768px) {
+  .event-bookings-page {
+    margin: 16px;
+    padding: 20px;
+    overflow-x: auto;
+  }
+
+  .event-bookings-page h1 {
+    font-size: 25px;
+  }
+
+  .event-bookings-page table {
+    min-width: 680px;
+  }
+}

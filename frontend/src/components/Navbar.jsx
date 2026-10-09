@@ -1,68 +1,85 @@
-import { useEffect, useState } from "react";
-import axios from "axios";
-import { useNavigate } from "react-router-dom";
+
+import { useCallback, useEffect, useState } from "react";
+import api from "../api";
+import { useLocation, useNavigate } from "react-router-dom";
 import NotificationDropdown from "./NotificationDropdown";
 
 function Navbar() {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [role, setRole] = useState("");
 
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const getNotifications = async () => {
+  // GET CURRENT USER PROFILE
+  const getProfile = useCallback(async () => {
     const token = localStorage.getItem("token");
 
     if (!token) {
+      setRole("");
       return;
     }
 
     try {
-      const response = await axios.get(
-        "http://127.0.0.1:8000/notifications",
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+      const response = await api.get("/auth/profile");
 
-      setNotifications(response.data);
+      // Normalize the role to uppercase
+      const userRole = String(
+        response.data.role || ""
+      ).toUpperCase();
 
-      const unread = response.data.filter(
+      setRole(userRole);
+    } catch (error) {
+      console.error("Error fetching profile:", error);
+      setRole("");
+    }
+  }, []);
+
+  // GET NOTIFICATIONS
+  const getNotifications = useCallback(async () => {
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      setNotifications([]);
+      setUnreadCount(0);
+      return;
+    }
+
+    try {
+      const response = await api.get("/notifications");
+      const notificationList = response.data || [];
+
+      setNotifications(notificationList);
+
+      const unread = notificationList.filter(
         (notification) => !notification.is_read
       );
 
       setUnreadCount(unread.length);
     } catch (error) {
-      console.log(error);
+      console.error("Error fetching notifications:", error);
     }
-  };
-
-  useEffect(() => {
-    getNotifications();
   }, []);
 
+  // REFRESH NAVBAR DATA WHEN THE ROUTE CHANGES
+  useEffect(() => {
+    getProfile();
+    getNotifications();
+  }, [location.pathname, getProfile, getNotifications]);
+
+  // MARK NOTIFICATION AS READ
   const markAsRead = async (notificationId) => {
-    const token = localStorage.getItem("token");
-
     try {
-      await axios.put(
-        `http://127.0.0.1:8000/notifications/${notificationId}/read`,
-        {},
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      getNotifications();
+      await api.put(`/notifications/${notificationId}/read`, {});
+      await getNotifications();
     } catch (error) {
-      console.log(error);
+      console.error("Error marking notification as read:", error);
     }
   };
 
+  // VIEW ALL NOTIFICATIONS
   const handleViewAll = () => {
     setShowDropdown(false);
     navigate("/notifications");
@@ -70,7 +87,7 @@ function Navbar() {
 
   return (
     <nav className="navbar">
-
+      {/* LOGO */}
       <div
         className="navbar-logo"
         onClick={() => navigate("/home")}
@@ -78,15 +95,17 @@ function Navbar() {
         SmartEvent
       </div>
 
+      {/* NAVBAR ACTIONS */}
       <div className="navbar-actions">
-
+        {/* MY TICKETS */}
         <button
-            className="navbar-link"
-            onClick={() => navigate("/tickets")}
-          >
-            🎟️ My Tickets
+          className="navbar-link"
+          onClick={() => navigate("/tickets")}
+        >
+          🎟️ My Tickets
         </button>
 
+        {/* BOOKING HISTORY */}
         <button
           className="navbar-link"
           onClick={() => navigate("/booking-history")}
@@ -94,10 +113,48 @@ function Navbar() {
           📋 Booking History
         </button>
 
+        {/* ORGANIZER LINKS */}
+        {role === "ORGANIZER" && (
+          <>
+            <button
+              className="navbar-link"
+              onClick={() => navigate("/organizer/dashboard")}
+            >
+              📊 Organizer Dashboard
+            </button>
+
+            <button
+              className="navbar-link"
+              onClick={() => navigate("/create-event")}
+            >
+              ➕ Create Event
+            </button>
+
+            <button
+              className="navbar-link"
+              onClick={() => navigate("/manage-events")}
+            >
+              🗂️ Manage Events
+            </button>
+          </>
+        )}
+
+        {/* ADMIN LINK */}
+        {role === "ADMIN" && (
+          <button
+            className="navbar-link"
+            onClick={() => navigate("/admin/dashboard")}
+          >
+            🛡️ Admin Dashboard
+          </button>
+        )}
+
+        {/* NOTIFICATIONS */}
         <div className="notification-wrapper">
           <button
             className="notification-button"
-            onClick={() => setShowDropdown(!showDropdown)}
+            onClick={() => setShowDropdown((previous) => !previous)}
+            aria-label={`Notifications, ${unreadCount} unread`}
           >
             🔔
 
@@ -115,11 +172,8 @@ function Navbar() {
               onViewAll={handleViewAll}
             />
           )}
-
         </div>
-
       </div>
-
     </nav>
   );
 }

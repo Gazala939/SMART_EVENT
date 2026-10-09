@@ -1,10 +1,12 @@
+
 import { useState } from "react";
-import axios from "axios";
+import api from "../api";
 import { useNavigate } from "react-router-dom";
 
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
 
@@ -12,26 +14,57 @@ function Login() {
     e.preventDefault();
 
     try {
-      const response = await axios.post(
-        "http://127.0.0.1:8000/auth/login",
-        {
-          email: email,
-          password: password,
-        }
-      );
+      setLoading(true);
 
-      localStorage.setItem(
-        "token",
-        response.data.access_token
-      );
+      // Step 1: Login and get the JWT token
+      const response = await api.post("/auth/login", {
+        email,
+        password,
+      });
+
+      const token = response.data.access_token;
+
+      // Save token so api.js can attach it to protected requests
+      localStorage.setItem("token", token);
+
+      // Step 2: Get the logged-in user's profile
+      const profileResponse = await api.get("/auth/profile");
+
+      const role = String(
+        profileResponse.data.role || ""
+      ).toUpperCase();
+
+      if (!["USER", "ORGANIZER", "ADMIN"].includes(role)) {
+        localStorage.removeItem("token");
+        localStorage.removeItem("role");
+
+        alert("Your account role could not be verified.");
+        return;
+      }
+
+      // Step 3: Save the user's role
+      localStorage.setItem("role", role);
 
       alert("Login successful!");
 
-      navigate("/home");
+      // Step 4: Redirect according to role
+      if (role === "ADMIN") {
+        navigate("/admin/dashboard");
+      } else if (role === "ORGANIZER") {
+        navigate("/organizer/dashboard");
+      } else {
+        navigate("/home");
+      }
     } catch (error) {
+      localStorage.removeItem("token");
+      localStorage.removeItem("role");
+
       alert(
-        error.response?.data?.detail || "Login failed"
+        error.response?.data?.detail ||
+          "Login failed. Please try again."
       );
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -47,6 +80,7 @@ function Login() {
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          required
         />
 
         <br />
@@ -57,19 +91,23 @@ function Login() {
           placeholder="Password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          required
         />
 
         <br />
         <br />
 
-        <button type="submit">
-          Login
+        <button type="submit" disabled={loading}>
+          {loading ? "Logging in..." : "Login"}
         </button>
       </form>
 
       <p>
         Don't have an account?{" "}
-        <button onClick={() => navigate("/register")}>
+        <button
+          type="button"
+          onClick={() => navigate("/register")}
+        >
           Register
         </button>
       </p>
