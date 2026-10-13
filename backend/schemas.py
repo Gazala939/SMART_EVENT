@@ -6,6 +6,9 @@
 # Import Pydantic components
 from pydantic import BaseModel, EmailStr, Field
 
+
+from typing import Literal
+
 # Import datetime
 from datetime import datetime
 
@@ -144,12 +147,21 @@ class BookingResponse(BaseModel):
     user_id: int
     event_id: int
     ticket_quantity: int
+
+    # Original booking amount
     total_price: float
+
+    # Module 13 - Coupon and discount fields
+    coupon_id: int | None = None
+    discount_amount: float = 0
+    final_amount: float = 0
+
     booking_status: str
     created_at: datetime
 
     class Config:
         from_attributes = True
+
 
 
 # ============================================================
@@ -225,3 +237,122 @@ class NotificationResponse(BaseModel):
 class RoleUpdate(BaseModel):
 
     role: str
+    
+
+# ============================================================
+# MODULE 12 - PAYMENT SCHEMAS
+# ============================================================
+
+
+
+class PaymentCreate(BaseModel):
+    booking_id: int = Field(gt=0)
+    payment_method: Literal["SIMULATED"] = "SIMULATED"
+    simulate_status: Literal["SUCCESS", "FAILED"] = "SUCCESS"
+
+
+class PaymentResponse(BaseModel):
+    id: int
+    booking_id: int
+    payment_method: str
+    payment_status: str
+    transaction_id: str | None
+    amount: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        
+
+# ============================================================
+# COUPON SCHEMAS - MODULE 13
+# ============================================================
+
+from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Literal
+
+
+class CouponCreate(BaseModel):
+    coupon_code: str = Field(min_length=3, max_length=50)
+    discount_type: Literal["PERCENTAGE", "FIXED"]
+    discount_value: float = Field(gt=0)
+    minimum_booking_amount: float = Field(default=0, ge=0)
+    expiry_date: datetime
+    usage_limit: int = Field(gt=0)
+    is_active: bool = True
+
+
+class CouponApply(BaseModel):
+    coupon_code: str = Field(min_length=3, max_length=50)
+    booking_id: int = Field(gt=0)
+
+
+class CouponResponse(BaseModel):
+    id: int
+    coupon_code: str
+    discount_type: str
+    discount_value: float
+    minimum_booking_amount: float
+    expiry_date: datetime
+    usage_limit: int
+    usage_count: int
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CouponValidationResponse(BaseModel):
+    valid: bool
+    message: str
+    coupon_code: str | None = None
+    original_amount: float | None = None
+    discount_amount: float | None = None
+    final_amount: float | None = None
+
+
+
+# ============================================================
+# MODULE 14 - EVENT REVIEW & RATING SCHEMAS
+# ============================================================
+
+# Submit a new review or update an existing review
+class ReviewCreate(BaseModel):
+
+    # Rating must be between 1 and 5
+    rating: int = Field(
+        ge=1,
+        le=5
+    )
+
+    # Review text is optional
+    review_text: str | None = Field(
+        default=None,
+        max_length=2000
+    )
+
+
+# Response for a single review
+class ReviewResponse(BaseModel):
+
+    id: int
+    user_id: int
+    event_id: int
+    rating: int
+    review_text: str | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Response containing event reviews and average rating
+class ReviewListResponse(BaseModel):
+
+    event_id: int
+    average_rating: float
+    total_reviews: int
+    reviews: list[ReviewResponse]
+

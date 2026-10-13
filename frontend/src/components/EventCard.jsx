@@ -4,65 +4,96 @@ import { useNavigate } from "react-router-dom";
 function EventCard({ event }) {
   const navigate = useNavigate();
 
-  // Get the event status from the backend
   const status = event.event_status || "UPCOMING";
-
-  // Set a CSS class based on the event status
   const statusClass = status.toLowerCase();
 
+  const formattedDate = event.event_date
+    ? new Date(event.event_date).toLocaleString("en-IN", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "Date to be announced";
+
+  const formattedPrice = Number(event.ticket_price || 0).toLocaleString(
+    "en-IN"
+  );
+
   return (
-    <div className="event-card">
-      {event.banner_image && (
-        <img
-          src={event.banner_image}
-          alt={event.title}
-          className="event-image"
-        />
-      )}
+    <article className="event-card">
+      <div className="event-card-image-wrapper">
+        {event.banner_image ? (
+          <img
+            src={event.banner_image}
+            alt={event.title || "Event"}
+            className="event-image"
+            loading="lazy"
+          />
+        ) : (
+          <div className="event-image-placeholder">
+            <span>🎟️</span>
+            <p>SmartEvent</p>
+          </div>
+        )}
 
-      <div className="event-card-content">
-        <h2>{event.title}</h2>
-
-        {/* Event Status Badge */}
         <span className={`event-status ${statusClass}`}>
           {status}
         </span>
 
-        {/* Cancellation Notice */}
+        {event.category && (
+          <span className="event-category-badge">
+            {event.category}
+          </span>
+        )}
+      </div>
+
+      <div className="event-card-content">
+        <h2 className="event-card-title">
+          {event.title || "Untitled Event"}
+        </h2>
+
         {status === "CANCELLED" && (
           <p className="cancellation-notice">
             This event has been cancelled.
           </p>
         )}
 
-        <p>{event.description}</p>
-
-        <p>
-          <strong>Category:</strong> {event.category}
+        <p className="event-card-description">
+          {event.description || "Discover more about this event."}
         </p>
 
-        <p>
-          <strong>Location:</strong> {event.location}
-        </p>
+        <div className="event-card-info">
+          <p>
+            <span aria-hidden="true">📍</span>
+            <span>{event.location || "Location to be announced"}</span>
+          </p>
 
-        <p>
-          <strong>Date:</strong>{" "}
-          {new Date(event.event_date).toLocaleString()}
-        </p>
+          <p>
+            <span aria-hidden="true">📅</span>
+            <span>{formattedDate}</span>
+          </p>
+        </div>
 
-        <p>
-          <strong>Price:</strong> ₹{event.ticket_price}
-        </p>
+        <div className="event-card-footer">
+          <div className="event-price">
+            <span>Ticket price</span>
+            <strong>₹{formattedPrice}</strong>
+          </div>
 
-        <button
-          onClick={() => navigate(`/events/${event.id}`)}
-        >
-          View Details
-        </button>
+          <button
+            type="button"
+            className="event-details-button"
+            onClick={() => navigate(`/events/${event.id}`)}
+            aria-label={`View details for ${event.title}`}
+          >
+            View Details <span aria-hidden="true">→</span>
+          </button>
+        </div>
       </div>
-    </div>
+    </article>
   );
 }
 
 export default EventCard;
-

@@ -1,6 +1,8 @@
+
 import { useEffect, useState } from "react";
 import axios from "axios";
 import TicketCard from "../components/TicketCard";
+
 
 function Tickets() {
   const [tickets, setTickets] = useState([]);
@@ -33,32 +35,29 @@ function Tickets() {
 
   if (loading) {
     return (
-      <div className="tickets-container">
-        <h2>Loading tickets...</h2>
+      <div className="tickets-page">
+        <div className="tickets-container">
+          <h2>Loading tickets...</h2>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="tickets-container">
+    <div className="tickets-page">
+      <main className="tickets-container">
+        <h1>My Tickets</h1>
 
-      <h1>My Tickets</h1>
-
-      {tickets.length === 0 ? (
-        <p>No tickets found.</p>
-      ) : (
-        <div className="tickets-list">
-
-          {tickets.map((ticket) => (
-            <TicketCard
-              key={ticket.id}
-              ticket={ticket}
-            />
-          ))}
-
-        </div>
-      )}
-
+        {tickets.length === 0 ? (
+          <p className="tickets-empty">No tickets found.</p>
+        ) : (
+          <div className="tickets-list">
+            {tickets.map((ticket) => (
+              <TicketCard key={ticket.id} ticket={ticket} />
+            ))}
+          </div>
+        )}
+      </main>
     </div>
   );
 }

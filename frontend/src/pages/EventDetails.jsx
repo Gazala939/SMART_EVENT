@@ -5,15 +5,29 @@ import { useParams, useNavigate } from "react-router-dom";
 
 function EventDetails() {
   const { event_id } = useParams();
+  const navigate = useNavigate();
 
+  // Event states
   const [event, setEvent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [quantity, setQuantity] = useState(1);
   const [bookingLoading, setBookingLoading] = useState(false);
 
-  const navigate = useNavigate();
+  // Review states
+  const [reviews, setReviews] = useState([]);
+  const [averageRating, setAverageRating] = useState(0);
+  const [totalReviews, setTotalReviews] = useState(0);
+  const [rating, setRating] = useState(0);
+  const [reviewText, setReviewText] = useState("");
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const [reviewMessage, setReviewMessage] = useState("");
+  const [editingReviewId, setEditingReviewId] = useState(null);
 
-  // GET EVENT DETAILS
+  // Logged-in user ID
+  const currentUserId = Number(localStorage.getItem("user_id"));
+
+  // Fetch event details
   useEffect(() => {
     let cancelled = false;
 
@@ -46,7 +60,30 @@ function EventDetails() {
     };
   }, [event_id]);
 
-  // BOOK TICKETS
+  // Fetch reviews and average rating
+  const fetchReviews = async () => {
+    try {
+      const response = await api.get(`/events/${event_id}/reviews`);
+
+      setReviews(response.data.reviews || []);
+      setAverageRating(response.data.average_rating || 0);
+      setTotalReviews(response.data.total_reviews || 0);
+      setReviewError("");
+    } catch (error) {
+      console.error("Error fetching reviews:", error);
+
+      setReviewError(
+        error.response?.data?.detail || "Could not load reviews."
+      );
+    }
+  };
+
+  useEffect(() => {
+    fetchReviews();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event_id]);
+
+  // Book tickets and proceed to payment
   const handleBooking = async () => {
     const token = localStorage.getItem("token");
 
@@ -56,36 +93,171 @@ function EventDetails() {
       return;
     }
 
+    if (!event || quantity < 1) {
+      alert("Please select a valid ticket quantity.");
+      return;
+    }
+
+    if (
+      event.event_status === "CANCELLED" ||
+      event.event_status === "COMPLETED" ||
+      event.event_status === "ONGOING"
+    ) {
+      alert("Booking is unavailable for this event.");
+      return;
+    }
+
     try {
       setBookingLoading(true);
 
       const response = await api.post("/bookings", {
         event_id: Number(event_id),
-        ticket_quantity: quantity,
+        ticket_quantity: Number(quantity),
       });
 
-      alert("Booking successful!");
+      const booking = response.data;
 
-      navigate("/booking-confirmation", {
-        state: {
-          booking: response.data,
-          event: event,
-          ticket: response.data.ticket,
-        },
-      });
+      if (!booking?.id) {
+        throw new Error(
+          "Booking was created without returning a booking ID."
+        );
+      }
+
+      if (booking.booking_status !== "PENDING") {
+        alert(
+          `Booking created with status: ${booking.booking_status}. Please check your booking history.`
+        );
+
+        navigate("/booking-history");
+        return;
+      }
+
+      navigate(`/payment-checkout?booking_id=${booking.id}`);
     } catch (error) {
+      console.error("Error creating booking:", error);
+
       alert(
-        error.response?.data?.detail || "Booking failed"
+        error.response?.data?.detail ||
+          error.message ||
+          "Booking failed. Please try again."
       );
     } finally {
       setBookingLoading(false);
     }
   };
 
+  // Submit a new review or update an existing review
+  const handleReviewSubmit = async (e) => {
+    e.preventDefault();
+
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      alert("Please login to write a review.");
+      navigate("/login");
+      return;
+    }
+
+    if (rating < 1 || rating > 5) {
+      setReviewError("Please select a rating from 1 to 5 stars.");
+      return;
+    }
+
+    try {
+      setReviewLoading(true);
+      setReviewError("");
+      setReviewMessage("");
+
+      const reviewData = {
+        rating: Number(rating),
+        review_text: reviewText.trim() || null,
+      };
+
+      if (editingReviewId !== null) {
+        await api.put(`/reviews/${editingReviewId}`, reviewData);
+
+        setReviewMessage("Your review was updated successfully.");
+      } else {
+        await api.post(`/events/${event_id}/reviews`, reviewData);
+
+        setReviewMessage("Your review was submitted successfully.");
+      }
+
+      setRating(0);
+      setReviewText("");
+      setEditingReviewId(null);
+
+      await fetchReviews();
+    } catch (error) {
+      setReviewError(
+        error.response?.data?.detail || "Could not save your review."
+      );
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  // Load an existing review into the form for editing
+  const handleEditReview = (review) => {
+    setEditingReviewId(review.id);
+    setRating(Number(review.rating));
+    setReviewText(review.review_text || "");
+    setReviewError("");
+    setReviewMessage("");
+
+    window.scrollTo({
+      top: document.body.scrollHeight,
+      behavior: "smooth",
+    });
+  };
+
+  // Delete an existing review
+  const handleDeleteReview = async (reviewId) => {
+    const confirmed = window.confirm(
+      "Are you sure you want to delete your review?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setReviewError("");
+      setReviewMessage("");
+
+      await api.delete(`/reviews/${reviewId}`);
+
+      setReviewMessage("Your review was deleted successfully.");
+
+      if (Number(editingReviewId) === Number(reviewId)) {
+        setEditingReviewId(null);
+        setRating(0);
+        setReviewText("");
+      }
+
+      await fetchReviews();
+    } catch (error) {
+      setReviewError(
+        error.response?.data?.detail || "Could not delete your review."
+      );
+    }
+  };
+
+  // Cancel editing
+  const cancelEditing = () => {
+    setEditingReviewId(null);
+    setRating(0);
+    setReviewText("");
+    setReviewError("");
+    setReviewMessage("");
+  };
+
+  // Loading screen
   if (loading) {
     return <h2>Loading event...</h2>;
   }
 
+  // Event not found
   if (!event) {
     return <h2>Event not found</h2>;
   }
@@ -101,12 +273,14 @@ function EventDetails() {
   return (
     <div className="event-details">
       <button
+        type="button"
         className="back-button"
         onClick={() => navigate("/home")}
-      >
+      > 
         ← Back to Events
       </button>
 
+      {/* Event image */}
       {event.banner_image && (
         <img
           src={event.banner_image}
@@ -117,12 +291,10 @@ function EventDetails() {
 
       <h1>{event.title}</h1>
 
-      {/* EVENT STATUS */}
       <span className={`event-status ${statusClass}`}>
         {status}
       </span>
 
-      {/* CANCELLATION NOTICE */}
       {status === "CANCELLED" && (
         <div className="cancellation-notice">
           <h3>Event Cancelled</h3>
@@ -146,6 +318,7 @@ function EventDetails() {
         </p>
       )}
 
+      {/* Event information */}
       <p>{event.description}</p>
 
       <p>
@@ -165,7 +338,7 @@ function EventDetails() {
         ₹{event.ticket_price}
       </p>
 
-      {/* BOOKING SECTION */}
+      {/* Ticket booking */}
       {canBook ? (
         <div className="booking-box">
           <h3>Book Tickets</h3>
@@ -177,9 +350,8 @@ function EventDetails() {
           <select
             id="ticket-quantity"
             value={quantity}
-            onChange={(e) =>
-              setQuantity(Number(e.target.value))
-            }
+            onChange={(e) => setQuantity(Number(e.target.value))}
+            disabled={bookingLoading}
           >
             {Array.from({ length: 10 }, (_, index) => (
               <option key={index + 1} value={index + 1}>
@@ -191,22 +363,205 @@ function EventDetails() {
 
           <p>
             <strong>Total Price:</strong>{" "}
-            ₹{event.ticket_price * quantity}
+            ₹{Number(event.ticket_price * quantity).toFixed(2)}
           </p>
 
+          
           <button
+            type="button"
             className="book-button"
             onClick={handleBooking}
-            disabled={bookingLoading}
+            disabled={bookingLoading || !canBook}
+            aria-busy={bookingLoading}
           >
-            {bookingLoading ? "Booking..." : "Book Tickets"}
+            {bookingLoading ? (
+              <>
+                <span className="booking-spinner" aria-hidden="true"></span>
+                Creating Booking...
+              </>
+            ) : (
+              <>
+                Proceed to Payment
+                <span aria-hidden="true"> →</span>
+              </>
+            )}
           </button>
+
         </div>
       ) : (
         <p className="event-info-notice">
           Booking is currently unavailable.
         </p>
       )}
+
+      {/* MODULE 14: REVIEWS AND RATINGS */}
+      <section className="event-reviews">
+        <h2>Event Reviews & Ratings</h2>
+
+        {/* Average rating */}
+        <div className="rating-summary">
+          <h3>
+            ⭐ {Number(averageRating).toFixed(1)} / 5
+          </h3>
+
+          <p>
+            Based on {totalReviews}{" "}
+            {totalReviews === 1 ? "review" : "reviews"}
+          </p>
+        </div>
+
+        {/* Review submission and editing form */}
+        <form
+          className="review-form"
+          onSubmit={handleReviewSubmit}
+        >
+          <h3>
+            {editingReviewId !== null
+              ? "Edit Your Review"
+              : "Write a Review"}
+          </h3>
+
+          <label>Choose your rating:</label>
+
+          <div
+            className="star-rating"
+            role="group"
+            aria-label="Rating"
+          >
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                type="button"
+                className={`star-button ${
+                  star <= rating ? "selected" : ""
+                }`}
+                onClick={() => setRating(star)}
+                aria-label={`${star} ${
+                  star === 1 ? "star" : "stars"
+                }`}
+                aria-pressed={rating === star}
+              >
+                ★
+              </button>
+            ))}
+          </div>
+
+          <textarea
+            value={reviewText}
+            onChange={(e) => setReviewText(e.target.value)}
+            placeholder="Share your experience (optional)..."
+            maxLength={2000}
+            rows={4}
+          />
+
+          <p className="review-character-count">
+            {reviewText.length}/2000 characters
+          </p>
+
+          {reviewError && (
+            <p className="review-error">{reviewError}</p>
+          )}
+
+          {reviewMessage && (
+            <p className="review-success">{reviewMessage}</p>
+          )}
+
+          <div className="review-form-actions">
+            <button
+              type="submit"
+              className="book-button"
+              disabled={reviewLoading}
+            >
+              {reviewLoading
+                ? "Saving..."
+                : editingReviewId !== null
+                ? "Update Review"
+                : "Submit Review"}
+            </button>
+
+            {editingReviewId !== null && (
+              <button
+                type="button"
+                className="back-button"
+                onClick={cancelEditing}
+              >
+                Cancel Edit
+              </button>
+            )}
+          </div>
+        </form>
+
+        {/* Display existing reviews */}
+        <div className="reviews-list">
+          <h3>What Attendees Say</h3>
+
+          {reviews.length === 0 ? (
+            <p>
+              No reviews yet. Be the first to review this event!
+            </p>
+          ) : (
+            reviews.map((review) => {
+              // Convert both IDs to numbers before comparing.
+              const isOwnReview =
+                Number(review.user_id) === currentUserId;
+
+              return (
+                <article
+                  className="review-card"
+                  key={review.id}
+                >
+                  <div className="review-card-header">
+                    <strong>
+                      {isOwnReview
+                        ? "Your Review"
+                        : `Attendee #${review.user_id}`}
+                    </strong>
+
+                    <span className="review-stars">
+                      {"★".repeat(Number(review.rating))}
+                      {"☆".repeat(
+                        5 - Number(review.rating)
+                      )}
+                    </span>
+                  </div>
+
+                  <p className="review-text">
+                    {review.review_text ||
+                      "No written feedback provided."}
+                  </p>
+
+                  <small>
+                    {new Date(
+                      review.created_at
+                    ).toLocaleString()}
+                  </small>
+
+                  {/* Only show actions for the review owner */}
+                  {isOwnReview && (
+                    <div className="review-card-actions">
+                      <button
+                        type="button"
+                        onClick={() => handleEditReview(review)}
+                      >
+                        Edit
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDeleteReview(review.id)
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </article>
+              );
+            })
+          )}
+        </div>
+      </section>
     </div>
   );
 }

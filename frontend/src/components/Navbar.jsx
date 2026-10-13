@@ -9,11 +9,16 @@ function Navbar() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
   const [role, setRole] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
 
-  // GET CURRENT USER PROFILE
+  // Hide navigation items on Login and Register pages
+  const isAuthPage =
+    location.pathname === "/login" ||
+    location.pathname === "/register";
+
   const getProfile = useCallback(async () => {
     const token = localStorage.getItem("token");
 
@@ -24,20 +29,13 @@ function Navbar() {
 
     try {
       const response = await api.get("/auth/profile");
-
-      // Normalize the role to uppercase
-      const userRole = String(
-        response.data.role || ""
-      ).toUpperCase();
-
-      setRole(userRole);
+      setRole(String(response.data.role || "").toUpperCase());
     } catch (error) {
       console.error("Error fetching profile:", error);
       setRole("");
     }
   }, []);
 
-  // GET NOTIFICATIONS
   const getNotifications = useCallback(async () => {
     const token = localStorage.getItem("token");
 
@@ -48,28 +46,48 @@ function Navbar() {
     }
 
     try {
-      const response = await api.get("/notifications");
-      const notificationList = response.data || [];
+      const [notificationsResponse, countResponse] =
+        await Promise.all([
+          api.get("/notifications"),
+          api.get("/notifications/unread-count"),
+        ]);
 
-      setNotifications(notificationList);
-
-      const unread = notificationList.filter(
-        (notification) => !notification.is_read
+      setNotifications(
+        Array.isArray(notificationsResponse.data)
+          ? notificationsResponse.data
+          : []
       );
 
-      setUnreadCount(unread.length);
+      setUnreadCount(countResponse.data.unread_count || 0);
     } catch (error) {
       console.error("Error fetching notifications:", error);
     }
   }, []);
 
-  // REFRESH NAVBAR DATA WHEN THE ROUTE CHANGES
   useEffect(() => {
     getProfile();
     getNotifications();
+    setShowDropdown(false);
+    setMenuOpen(false);
   }, [location.pathname, getProfile, getNotifications]);
 
-  // MARK NOTIFICATION AS READ
+  const handleNavigate = (path) => {
+    setMenuOpen(false);
+    setShowDropdown(false);
+    navigate(path);
+  };
+
+  const isActive = (path) => {
+    if (path === "/home") {
+      return (
+        location.pathname === "/" ||
+        location.pathname === "/home"
+      );
+    }
+
+    return location.pathname.startsWith(path);
+  };
+
   const markAsRead = async (notificationId) => {
     try {
       await api.put(`/notifications/${notificationId}/read`, {});
@@ -79,101 +97,173 @@ function Navbar() {
     }
   };
 
-  // VIEW ALL NOTIFICATIONS
   const handleViewAll = () => {
     setShowDropdown(false);
     navigate("/notifications");
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("role");
+    localStorage.removeItem("user_id");
+
+    setNotifications([]);
+    setUnreadCount(0);
+    setRole("");
+    setShowDropdown(false);
+    setMenuOpen(false);
+
+    navigate("/login", { replace: true });
+  };
+
   return (
-    <nav className="navbar">
-      {/* LOGO */}
-      <div
-        className="navbar-logo"
-        onClick={() => navigate("/home")}
-      >
-        SmartEvent
-      </div>
+    <nav className={`navbar ${isAuthPage ? "navbar-auth-page" : ""}`}>
+      {/* SmartEvent logo */}
+      
 
-      {/* NAVBAR ACTIONS */}
-      <div className="navbar-actions">
-        {/* MY TICKETS */}
+      {!isAuthPage && (
         <button
-          className="navbar-link"
-          onClick={() => navigate("/tickets")}
+          type="button"
+          className="navbar-logo"
+          onClick={() => handleNavigate("/home")}
+          aria-label="SmartEvent home"
         >
-          🎟️ My Tickets
-        </button>
+          
 
-        {/* BOOKING HISTORY */}
+          <span>
+            Smart<span className="navbar-logo-highlight">Event</span>
+          </span>
+        </button>
+      )}
+
+
+      {/* Hide the mobile menu on Login and Register pages */}
+      {!isAuthPage && (
         <button
-          className="navbar-link"
-          onClick={() => navigate("/booking-history")}
+          type="button"
+          className="navbar-menu-toggle"
+          onClick={() => setMenuOpen((previous) => !previous)}
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
+          aria-expanded={menuOpen}
         >
-          📋 Booking History
+          {menuOpen ? "✕" : "☰"}
         </button>
+      )}
 
-        {/* ORGANIZER LINKS */}
-        {role === "ORGANIZER" && (
-          <>
-            <button
-              className="navbar-link"
-              onClick={() => navigate("/organizer/dashboard")}
-            >
-              📊 Organizer Dashboard
-            </button>
-
-            <button
-              className="navbar-link"
-              onClick={() => navigate("/create-event")}
-            >
-              ➕ Create Event
-            </button>
-
-            <button
-              className="navbar-link"
-              onClick={() => navigate("/manage-events")}
-            >
-              🗂️ Manage Events
-            </button>
-          </>
-        )}
-
-        {/* ADMIN LINK */}
-        {role === "ADMIN" && (
+      {!isAuthPage && (
+        <div
+          className={`navbar-actions ${
+            menuOpen ? "navbar-actions-open" : ""
+          }`}
+        >
           <button
-            className="navbar-link"
-            onClick={() => navigate("/admin/dashboard")}
+            type="button"
+            className={`navbar-link ${
+              isActive("/tickets") ? "navbar-link-active" : ""
+            }`}
+            onClick={() => handleNavigate("/tickets")}
           >
-            🛡️ Admin Dashboard
-          </button>
-        )}
-
-        {/* NOTIFICATIONS */}
-        <div className="notification-wrapper">
-          <button
-            className="notification-button"
-            onClick={() => setShowDropdown((previous) => !previous)}
-            aria-label={`Notifications, ${unreadCount} unread`}
-          >
-            🔔
-
-            {unreadCount > 0 && (
-              <span className="notification-count">
-                {unreadCount}
-              </span>
-            )}
+            <span aria-hidden="true">🎟️</span>
+            My Tickets
           </button>
 
-          {showDropdown && (
-            <NotificationDropdown
-              notifications={notifications}
-              onMarkAsRead={markAsRead}
-              onViewAll={handleViewAll}
-            />
+          <button
+            type="button"
+            className={`navbar-link ${
+              isActive("/booking-history") ? "navbar-link-active" : ""
+            }`}
+            onClick={() => handleNavigate("/booking-history")}
+          >
+            <span aria-hidden="true">📋</span>
+            Booking History
+          </button>
+
+          {role === "ORGANIZER" && (
+            <>
+              <button
+                type="button"
+                className={`navbar-link ${
+                  isActive("/organizer/dashboard")
+                    ? "navbar-link-active"
+                    : ""
+                }`}
+                onClick={() => handleNavigate("/organizer/dashboard")}
+              >
+                📊 Organizer Dashboard
+              </button>
+
+              <button
+                type="button"
+                className={`navbar-link ${
+                  isActive("/create-event") ? "navbar-link-active" : ""
+                }`}
+                onClick={() => handleNavigate("/create-event")}
+              >
+                ➕ Create Event
+              </button>
+
+              <button
+                type="button"
+                className={`navbar-link ${
+                  isActive("/manage-events") ? "navbar-link-active" : ""
+                }`}
+                onClick={() => handleNavigate("/manage-events")}
+              >
+                🗂️ Manage Events
+              </button>
+            </>
           )}
+
+          {role === "ADMIN" && (
+            <button
+              type="button"
+              className={`navbar-link ${
+                isActive("/admin/dashboard") ? "navbar-link-active" : ""
+              }`}
+              onClick={() => handleNavigate("/admin/dashboard")}
+            >
+              🛡️ Admin Dashboard
+            </button>
+          )}
+
+          <div className="notification-wrapper">
+            <button
+              type="button"
+              className="notification-button"
+              onClick={() =>
+                setShowDropdown((previous) => !previous)
+              }
+              aria-label={`Notifications, ${unreadCount} unread`}
+              aria-expanded={showDropdown}
+            >
+              <span aria-hidden="true">🔔</span>
+
+              {unreadCount > 0 && (
+                <span className="notification-count">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
+            </button>
+
+            {showDropdown && (
+              <NotificationDropdown
+                notifications={notifications}
+                onMarkAsRead={markAsRead}
+                onViewAll={handleViewAll}
+              />
+            )}
+          </div>
+
+          <button
+            type="button"
+            className="navbar-link navbar-logout"
+            onClick={handleLogout}
+          >
+            <span aria-hidden="true">↪️</span>
+            Logout
+          </button>
         </div>
-      </div>
+      )}
     </nav>
   );
 }

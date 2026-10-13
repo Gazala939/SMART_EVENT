@@ -1,19 +1,35 @@
 
-from fastapi import FastAPI, Depends, HTTPException, status
+# ============================================================
+# SmartEvent - Main FastAPI Application
+# ============================================================
+
+from fastapi import FastAPI, Depends, HTTPException, status,Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+
 import os
 import uuid
 import qrcode
 import asyncio
 
 from datetime import date, datetime, time, timedelta
+from typing import Optional
+
 
 from database import engine, Base, get_db, SessionLocal
 
-from models import User, Event, Booking, Ticket, Notification
+from models import (
+    User,
+    Event,
+    Booking,
+    Ticket,
+    Notification,
+    Payment,
+    Coupon,
+    Review
+)
 
 from schemas import (
     UserRegister,
@@ -27,7 +43,16 @@ from schemas import (
     BookingResponse,
     TicketResponse,
     BookingWithTicketResponse,
-    NotificationResponse
+    NotificationResponse,
+    PaymentCreate,
+    PaymentResponse,
+    CouponCreate,
+    CouponApply,
+    CouponResponse,
+    CouponValidationResponse,
+    ReviewCreate,
+    ReviewResponse,
+    ReviewListResponse,
 )
 
 from auth import (
@@ -51,11 +76,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
-os.makedirs("qr_codes", exist_ok=True)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+QR_FOLDER = os.path.join(BASE_DIR, "qr_codes")
+
+os.makedirs(QR_FOLDER, exist_ok=True)
 
 app.mount(
     "/qr_codes",
-    StaticFiles(directory="qr_codes"),
+    StaticFiles(directory=QR_FOLDER),
     name="qr_codes"
 )
 
@@ -73,26 +101,12 @@ app.add_middleware(
 # ============================================================
 
 def refresh_event_status(event):
-    """
-    Status rules:
-    Future event              -> UPCOMING
-    Event starts today        -> ONGOING
-    Event date has passed     -> COMPLETED
-    Cancelled event           -> remains CANCELLED
-    Manually completed event  -> remains COMPLETED
-
-    This project currently stores a start date/time only.
-    Therefore, an event is considered completed the next day.
-    """
-
     if event.event_status in ("CANCELLED", "COMPLETED"):
         return False
 
     now = datetime.utcnow()
     event_date = event.event_date
 
-    # Handle timezone-aware dates by normalizing them to naive
-    # UTC values for comparison with this project's UTC clock.
     if event_date.tzinfo is not None:
         event_date = event_date.astimezone(
             datetime.now().astimezone().tzinfo
@@ -100,10 +114,8 @@ def refresh_event_status(event):
 
     if event_date.date() < now.date():
         new_status = "COMPLETED"
-
     elif event_date <= now:
         new_status = "ONGOING"
-
     else:
         new_status = "UPCOMING"
 
@@ -115,8 +127,6 @@ def refresh_event_status(event):
 
 
 def refresh_event_statuses(db, events):
-    """Refresh event statuses and save changes."""
-
     changed = False
 
     for event in events:
@@ -137,28 +147,21 @@ def notify_confirmed_bookers(
     notification_title,
     notification_message
 ):
-    """Create a notification for each user with a confirmed booking."""
-
     bookings = db.query(Booking).filter(
         Booking.event_id == event.id,
         Booking.booking_status == "CONFIRMED"
     ).all()
 
-    # A user receives only one notification per update,
-    # even if they have multiple confirmed bookings.
-    user_ids = {
-        booking.user_id for booking in bookings
-    }
+    user_ids = {booking.user_id for booking in bookings}
 
     for user_id in user_ids:
-        notification = Notification(
+        db.add(Notification(
             user_id=user_id,
             title=notification_title,
             message=notification_message,
-            type="EVENT",
+            notification_type="EVENT",
             is_read=False
-        )
-        db.add(notification)
+        ))
 
 
 # ============================================================
@@ -280,10 +283,16 @@ def update_user_role(
     user = db.query(User).filter(User.id == user_id).first()
 
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
 
     if role_data.role not in ["USER", "ORGANIZER", "ADMIN"]:
-        raise HTTPException(status_code=400, detail="Invalid role")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid role"
+        )
 
     user.role = role_data.role
     db.commit()
@@ -301,15 +310,22 @@ def delete_user(
     user = db.query(User).filter(User.id == user_id).first()
 
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
 
-    if db.query(Booking).filter(Booking.user_id == user_id).first():
+    if db.query(Booking).filter(
+        Booking.user_id == user_id
+    ).first():
         raise HTTPException(
             status_code=400,
             detail="Cannot delete user with existing bookings"
         )
 
-    if db.query(Event).filter(Event.organizer_id == user_id).first():
+    if db.query(Event).filter(
+        Event.organizer_id == user_id
+    ).first():
         raise HTTPException(
             status_code=400,
             detail="Cannot delete organizer with existing events"
@@ -348,8 +364,6 @@ def create_event(
         event_status="UPCOMING"
     )
 
-    # Set the correct status immediately if the submitted date
-    # is today or already in the past.
     refresh_event_status(new_event)
 
     db.add(new_event)
@@ -384,9 +398,7 @@ def get_my_events(
 @app.get("/events", response_model=list[EventResponse])
 def get_all_events(db: Session = Depends(get_db)):
     events = db.query(Event).all()
-
     refresh_event_statuses(db, events)
-
     return events
 
 
@@ -404,27 +416,126 @@ def get_events_by_category(
     ).all()
 
     refresh_event_statuses(db, events)
-
     return events
 
 
 # ============================================================
 # EVENTS - TITLE SEARCH
-# Keep this before /events/{event_id}
+# Keep before /events/{event_id}
 # ============================================================
 
 @app.get("/events/search", response_model=list[EventResponse])
 def search_events(
-    title: str,
-    db: Session = Depends(get_db)
+    title: Optional[str] = Query(default=None),
+    category: Optional[str] = Query(default=None),
+    location: Optional[str] = Query(default=None),
+    start_date: Optional[date] = Query(default=None),
+    end_date: Optional[date] = Query(default=None),
+    sort_by: str = Query(default="date"),
+    sort_order: str = Query(default="asc"),
+    db: Session = Depends(get_db),
 ):
-    events = db.query(Event).filter(
-        Event.title.ilike(f"%{title}%")
-    ).all()
+    # Validate sorting options
+    allowed_sort_fields = {"date", "popularity", "price"}
 
+    if sort_by not in allowed_sort_fields:
+        raise HTTPException(
+            status_code=400,
+            detail="sort_by must be date, popularity, or price"
+        )
+
+    if sort_order not in {"asc", "desc"}:
+        raise HTTPException(
+            status_code=400,
+            detail="sort_order must be asc or desc"
+        )
+
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date cannot be after end_date"
+        )
+
+    # Start with all events
+    query = db.query(Event)
+
+    # Search by event name
+    if title and title.strip():
+        query = query.filter(
+            Event.title.ilike(f"%{title.strip()}%")
+        )
+
+    # Filter by category
+    if category and category.strip():
+        query = query.filter(
+            Event.category.ilike(f"%{category.strip()}%")
+        )
+
+    # Filter by location
+    if location and location.strip():
+        query = query.filter(
+            Event.location.ilike(f"%{location.strip()}%")
+        )
+
+    # Filter by date range
+    if start_date:
+        query = query.filter(
+            Event.event_date >= datetime.combine(
+                start_date, time.min
+            )
+        )
+
+    if end_date:
+        query = query.filter(
+            Event.event_date <= datetime.combine(
+                end_date, time.max
+            )
+        )
+
+    # Sort events
+    if sort_by == "date":
+        sort_column = Event.event_date
+
+    elif sort_by == "price":
+        sort_column = Event.ticket_price
+
+    else:
+        # Popularity = total tickets in confirmed bookings
+        popularity_subquery = (
+            db.query(
+                Booking.event_id.label("event_id"),
+                func.sum(
+                    Booking.ticket_quantity
+                ).label("ticket_count")
+            )
+            .filter(Booking.booking_status == "CONFIRMED")
+            .group_by(Booking.event_id)
+            .subquery()
+        )
+
+        query = query.outerjoin(
+            popularity_subquery,
+            Event.id == popularity_subquery.c.event_id
+        )
+
+        popularity_column = func.coalesce(
+            popularity_subquery.c.ticket_count, 0
+        )
+
+        sort_column = popularity_column
+
+    if sort_order == "asc":
+        query = query.order_by(sort_column.asc(), Event.id.asc())
+    else:
+        query = query.order_by(sort_column.desc(), Event.id.asc())
+
+    events = query.all()
+
+    # Keep existing event-status refresh behavior
     refresh_event_statuses(db, events)
 
     return events
+
 
 
 # ============================================================
@@ -441,18 +552,19 @@ def get_event(
     ).first()
 
     if event is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
 
-    refresh_event_statuses(db, [event])
+    refresh_event_status(event)
     db.refresh(event)
 
     return event
 
 
-
 # ============================================================
 # EVENTS - UPDATE
-# ORGANIZER CAN UPDATE OWN EVENTS; ADMIN CAN UPDATE ANY
 # ============================================================
 
 @app.put("/events/{event_id}", response_model=EventResponse)
@@ -464,7 +576,6 @@ def update_event(
         require_role("ORGANIZER", "ADMIN")
     )
 ):
-    # 1. Find the event
     event = db.query(Event).filter(
         Event.id == event_id
     ).first()
@@ -475,7 +586,6 @@ def update_event(
             detail="Event not found"
         )
 
-    # 2. Check ownership
     if (
         current_user.role == "ORGANIZER"
         and event.organizer_id != current_user.id
@@ -485,14 +595,12 @@ def update_event(
             detail="You can update only your own events"
         )
 
-    # 3. Prevent updates to cancelled events
     if event.event_status == "CANCELLED":
         raise HTTPException(
             status_code=400,
             detail="Cancelled events cannot be updated"
         )
 
-    # 4. Update event details
     event.title = event_data.title
     event.description = event_data.description
     event.category = event_data.category
@@ -502,28 +610,23 @@ def update_event(
     event.total_tickets = event_data.total_tickets
     event.banner_image = event_data.banner_image
 
-    # 5. Refresh the status after changing the event date
     if event.event_status != "COMPLETED":
         event.event_status = "UPCOMING"
         refresh_event_status(event)
 
-    # 6. Notify users who have confirmed bookings
     notify_confirmed_bookers(
         db,
         event,
         "Event Updated",
-        (
-            f'The event "{event.title}" has been updated. '
-            "Please check the latest event details."
-        )
+        f'The event "{event.title}" has been updated. '
+        "Please check the latest event details."
     )
 
-    # 7. Save the event and its notifications
     db.commit()
     db.refresh(event)
 
-    # 8. Return the updated event
     return event
+
 
 # ============================================================
 # EVENTS - DELETE
@@ -542,7 +645,10 @@ def delete_event(
     ).first()
 
     if event is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
 
     if (
         current_user.role == "ORGANIZER"
@@ -553,7 +659,6 @@ def delete_event(
             detail="You can delete only your own events"
         )
 
-    # Keep the existing delete endpoint for compatibility.
     db.delete(event)
     db.commit()
 
@@ -575,7 +680,10 @@ def cancel_event(
     ).first()
 
     if event is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
 
     if event.organizer_id != current_user.id:
         raise HTTPException(
@@ -595,10 +703,8 @@ def cancel_event(
         db,
         event,
         "Event Cancelled",
-        (
-            f'The event "{event.title}" has been cancelled. '
-            "Please do not attend this event."
-        )
+        f'The event "{event.title}" has been cancelled. '
+        "Please do not attend this event."
     )
 
     db.commit()
@@ -626,7 +732,10 @@ def complete_event(
     ).first()
 
     if event is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
 
     if event.organizer_id != current_user.id:
         raise HTTPException(
@@ -670,10 +779,15 @@ def get_event_bookings(
     current_user: User = Depends(require_role("ORGANIZER")),
     db: Session = Depends(get_db)
 ):
-    event = db.query(Event).filter(Event.id == event_id).first()
+    event = db.query(Event).filter(
+        Event.id == event_id
+    ).first()
 
     if event is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
 
     if event.organizer_id is None:
         raise HTTPException(
@@ -726,8 +840,18 @@ def get_organizer_analytics(
         tickets_sold = sum(
             booking.ticket_quantity for booking in confirmed
         )
+
         remaining = max(event.total_tickets - tickets_sold, 0)
-        revenue = sum(booking.total_price for booking in confirmed)
+
+        revenue = sum(
+            (
+                booking.final_amount
+                if booking.final_amount is not None
+                else booking.total_price
+            )
+            for booking in confirmed
+        )
+
         booking_count = len(confirmed)
 
         total_tickets_sold += tickets_sold
@@ -766,10 +890,15 @@ def get_single_event_analytics(
     current_user: User = Depends(require_role("ORGANIZER")),
     db: Session = Depends(get_db)
 ):
-    event = db.query(Event).filter(Event.id == event_id).first()
+    event = db.query(Event).filter(
+        Event.id == event_id
+    ).first()
 
     if event is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
 
     if event.organizer_id != current_user.id:
         raise HTTPException(
@@ -802,7 +931,12 @@ def get_single_event_analytics(
             event.total_tickets - tickets_sold, 0
         ),
         "total_revenue": sum(
-            booking.total_price for booking in confirmed
+            (
+                booking.final_amount
+                if booking.final_amount is not None
+                else booking.total_price
+            )
+            for booking in confirmed
         ),
         "booking_count": len(confirmed)
     }
@@ -829,43 +963,36 @@ def admin_analytics(
     start_date: date | None = None,
     end_date: date | None = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: User = Depends(require_role("ADMIN"))
 ):
-    
-
     if start_date and end_date and start_date > end_date:
         raise HTTPException(
             status_code=400,
-            detail="Start date cannot be later than end date",
+            detail="Start date cannot be later than end date"
         )
 
-    # Support either booking quantity column name.
     quantity_col = getattr(Booking, "ticket_quantity", None)
-
     if quantity_col is None:
         quantity_col = getattr(Booking, "quantity", None)
 
-    status_col = getattr(Booking, "status", None)
-
+    status_col = getattr(Booking, "booking_status", None)
     if status_col is None:
-        status_col = getattr(Booking, "booking_status", None)
+        status_col = getattr(Booking, "status", None)
 
     created_col = getattr(Booking, "created_at", None)
-    amount_col = getattr(Booking, "total_price", None)
 
     if quantity_col is None or status_col is None:
         raise HTTPException(
             status_code=500,
-            detail="Check the Booking model's quantity and status fields",
+            detail="Check Booking quantity and status fields"
         )
 
-    if created_col is None or amount_col is None:
+    if created_col is None:
         raise HTTPException(
             status_code=500,
-            detail="Check the Booking model's created_at and total_price fields",
+            detail="Check Booking created_at field"
         )
 
-    # Apply date filters to booking-based statistics.
     def filtered_bookings():
         query = db.query(Booking)
 
@@ -886,41 +1013,40 @@ def admin_analytics(
             func.upper(status_col) == "CONFIRMED"
         )
 
-    # Summary counts.
     total_users = db.query(User).count()
     total_events = db.query(Event).count()
     total_bookings = filtered_bookings().count()
-
     confirmed_count = confirmed_bookings_query().count()
 
     cancelled_count = filtered_bookings().filter(
         func.upper(status_col) == "CANCELLED"
     ).count()
-    
+
+    revenue_expression = func.coalesce(
+        func.sum(
+            func.coalesce(Booking.final_amount, Booking.total_price)
+        ),
+        0
+    )
 
     total_revenue = (
         confirmed_bookings_query()
-        .with_entities(
-            func.coalesce(func.sum(amount_col), 0)
-        )
-        .scalar()
-        or 0
+        .with_entities(revenue_expression)
+        .scalar() or 0
     )
 
     total_tickets_sold = (
         confirmed_bookings_query()
         .with_entities(func.coalesce(func.sum(quantity_col), 0))
-        .scalar()
-        or 0
+        .scalar() or 0
     )
 
-    # 1. Daily ticket sales: confirmed bookings grouped by date.
     daily_rows = (
         confirmed_bookings_query()
         .filter(created_col.isnot(None))
         .with_entities(
             func.date(created_col).label("sale_date"),
-            func.coalesce(func.sum(quantity_col), 0).label("tickets_sold"),
+            func.coalesce(func.sum(quantity_col), 0).label("tickets_sold")
         )
         .group_by(func.date(created_col))
         .order_by(func.date(created_col))
@@ -930,12 +1056,11 @@ def admin_analytics(
     daily_ticket_sales = [
         {
             "date": str(row.sale_date),
-            "tickets_sold": int(row.tickets_sold or 0),
+            "tickets_sold": int(row.tickets_sold or 0)
         }
         for row in daily_rows
     ]
 
-    # 2. Monthly booking trends: all booking statuses.
     month_expression = func.strftime("%Y-%m", created_col)
 
     monthly_rows = (
@@ -943,7 +1068,7 @@ def admin_analytics(
         .filter(created_col.isnot(None))
         .with_entities(
             month_expression.label("month"),
-            func.count(Booking.id).label("total_bookings"),
+            func.count(Booking.id).label("total_bookings")
         )
         .group_by(month_expression)
         .order_by(month_expression)
@@ -953,12 +1078,11 @@ def admin_analytics(
     monthly_booking_trends = [
         {
             "month": str(row.month),
-            "total_bookings": int(row.total_bookings or 0),
+            "total_bookings": int(row.total_bookings or 0)
         }
         for row in monthly_rows
     ]
 
-    # 3. Most popular events, ranked by tickets sold.
     popular_rows = (
         confirmed_bookings_query()
         .join(Event, Booking.event_id == Event.id)
@@ -966,7 +1090,7 @@ def admin_analytics(
             Event.id.label("event_id"),
             Event.title.label("event_title"),
             func.count(Booking.id).label("booking_count"),
-            func.coalesce(func.sum(quantity_col), 0).label("tickets_sold"),
+            func.coalesce(func.sum(quantity_col), 0).label("tickets_sold")
         )
         .group_by(Event.id, Event.title)
         .order_by(func.sum(quantity_col).desc())
@@ -979,22 +1103,31 @@ def admin_analytics(
             "event_id": row.event_id,
             "event_title": row.event_title,
             "booking_count": int(row.booking_count or 0),
-            "tickets_sold": int(row.tickets_sold or 0),
+            "tickets_sold": int(row.tickets_sold or 0)
         }
         for row in popular_rows
     ]
 
-    # 4. Top revenue-generating events.
     revenue_rows = (
         confirmed_bookings_query()
         .join(Event, Booking.event_id == Event.id)
         .with_entities(
             Event.id.label("event_id"),
             Event.title.label("event_title"),
-            func.coalesce(func.sum(amount_col), 0).label("revenue"),
+            func.coalesce(
+                func.sum(
+                    func.coalesce(
+                        Booking.final_amount,
+                        Booking.total_price
+                    )
+                ),
+                0
+            ).label("revenue")
         )
         .group_by(Event.id, Event.title)
-        .order_by(func.sum(amount_col).desc())
+        .order_by(func.sum(
+            func.coalesce(Booking.final_amount, Booking.total_price)
+        ).desc())
         .limit(5)
         .all()
     )
@@ -1003,7 +1136,7 @@ def admin_analytics(
         {
             "event_id": row.event_id,
             "event_title": row.event_title,
-            "revenue": float(row.revenue or 0),
+            "revenue": float(row.revenue or 0)
         }
         for row in revenue_rows
     ]
@@ -1019,16 +1152,221 @@ def admin_analytics(
         "daily_ticket_sales": daily_ticket_sales,
         "monthly_booking_trends": monthly_booking_trends,
         "most_popular_events": most_popular_events,
-        "top_revenue_events": top_revenue_events,
+        "top_revenue_events": top_revenue_events
     }
 
+
 # ============================================================
-# BOOKINGS - CREATE
+# HELPER - GENERATE TICKET QR
+# ============================================================
+
+def generate_ticket_qr(ticket_code: str):
+    qr = qrcode.make(ticket_code)
+
+    os.makedirs(QR_FOLDER, exist_ok=True)
+
+    file_name = f"{ticket_code}.png"
+    file_path = os.path.join(QR_FOLDER, file_name)
+
+    qr.save(file_path)
+
+    return f"/qr_codes/{file_name}"
+
+
+# ============================================================
+# MODULE 13 - CREATE COUPON (ADMIN ONLY)
+# ============================================================
+
+@app.post(
+    "/coupons",
+    response_model=CouponResponse,
+    status_code=status.HTTP_201_CREATED
+)
+def create_coupon(
+    coupon_data: CouponCreate,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: Session = Depends(get_db)
+):
+    coupon_code = coupon_data.coupon_code.strip().upper()
+
+    if coupon_data.discount_type == "PERCENTAGE":
+        if coupon_data.discount_value > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="Percentage discount cannot exceed 100%"
+            )
+
+    if coupon_data.expiry_date <= datetime.utcnow():
+        raise HTTPException(
+            status_code=400,
+            detail="Coupon expiry date must be in the future"
+        )
+
+    existing_coupon = db.query(Coupon).filter(
+        func.upper(Coupon.coupon_code) == coupon_code
+    ).first()
+
+    if existing_coupon:
+        raise HTTPException(
+            status_code=400,
+            detail="Coupon code already exists"
+        )
+
+    new_coupon = Coupon(
+        coupon_code=coupon_code,
+        discount_type=coupon_data.discount_type,
+        discount_value=coupon_data.discount_value,
+        minimum_booking_amount=coupon_data.minimum_booking_amount,
+        expiry_date=coupon_data.expiry_date,
+        usage_limit=coupon_data.usage_limit,
+        usage_count=0,
+        is_active=coupon_data.is_active
+    )
+
+    db.add(new_coupon)
+    db.commit()
+    db.refresh(new_coupon)
+
+    return new_coupon
+
+
+# ============================================================
+# MODULE 13 - LIST COUPONS (ADMIN ONLY)
+# ============================================================
+
+@app.get("/coupons", response_model=list[CouponResponse])
+def get_coupons(
+    current_user: User = Depends(require_role("ADMIN")),
+    db: Session = Depends(get_db)
+):
+    return db.query(Coupon).order_by(Coupon.created_at.desc()).all()
+
+
+# ============================================================
+# MODULE 13 - APPLY COUPON TO A PENDING BOOKING
+# ============================================================
+
+@app.post(
+    "/coupons/apply",
+    response_model=CouponValidationResponse
+)
+def apply_coupon(
+    coupon_data: CouponApply,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    booking = db.query(Booking).filter(
+        Booking.id == coupon_data.booking_id
+    ).first()
+
+    if booking is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
+
+    if booking.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can apply a coupon only to your own booking"
+        )
+
+    if booking.booking_status != "PENDING":
+        raise HTTPException(
+            status_code=400,
+            detail="Coupon can only be applied to a pending booking"
+        )
+
+    # Do not allow the price to change after payment has started.
+    existing_payment = db.query(Payment).filter(
+        Payment.booking_id == booking.id,
+        Payment.payment_status == "SUCCESS"
+    ).first()
+
+    if existing_payment:
+        raise HTTPException(
+            status_code=400,
+            detail="This booking has already been paid"
+        )
+
+    coupon_code = coupon_data.coupon_code.strip().upper()
+
+    coupon = db.query(Coupon).filter(
+        func.upper(Coupon.coupon_code) == coupon_code
+    ).first()
+
+    if coupon is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Invalid coupon code"
+        )
+
+    if not coupon.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="This coupon is inactive"
+        )
+
+    if coupon.expiry_date <= datetime.utcnow():
+        raise HTTPException(
+            status_code=400,
+            detail="This coupon has expired"
+        )
+
+    if coupon.usage_count >= coupon.usage_limit:
+        raise HTTPException(
+            status_code=400,
+            detail="Coupon usage limit has been reached"
+        )
+
+    if booking.total_price < coupon.minimum_booking_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Minimum booking amount is "
+                f"₹{coupon.minimum_booking_amount:.2f}"
+            )
+        )
+
+    if coupon.discount_type == "PERCENTAGE":
+        discount = booking.total_price * coupon.discount_value / 100
+    elif coupon.discount_type == "FIXED":
+        discount = coupon.discount_value
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported coupon discount type"
+        )
+
+    discount = min(discount, booking.total_price)
+
+    booking.coupon_id = coupon.id
+    booking.discount_amount = round(discount, 2)
+    booking.final_amount = round(
+        booking.total_price - discount,
+        2
+    )
+
+    db.commit()
+    db.refresh(booking)
+
+    return {
+        "valid": True,
+        "message": "Coupon applied successfully",
+        "coupon_code": coupon.coupon_code,
+        "original_amount": round(booking.total_price, 2),
+        "discount_amount": booking.discount_amount,
+        "final_amount": booking.final_amount
+    }
+
+
+# ============================================================
+# BOOKINGS - CREATE PENDING BOOKING
 # ============================================================
 
 @app.post(
     "/bookings",
-    response_model=BookingWithTicketResponse,
+    response_model=BookingResponse,
     status_code=status.HTTP_201_CREATED
 )
 def create_booking(
@@ -1041,7 +1379,10 @@ def create_booking(
     ).first()
 
     if event is None:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
 
     refresh_event_status(event)
 
@@ -1057,15 +1398,22 @@ def create_booking(
             detail="Bookings are not available for this event"
         )
 
-    booked = db.query(Booking).filter(
+    if booking_data.ticket_quantity <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Ticket quantity must be greater than zero"
+        )
+
+    active_bookings = db.query(Booking).filter(
         Booking.event_id == event.id,
-        Booking.booking_status != "CANCELLED"
+        Booking.booking_status.in_(["PENDING", "CONFIRMED"])
     ).all()
 
     total_booked = sum(
-        booking.ticket_quantity for booking in booked
+        booking.ticket_quantity for booking in active_bookings
     )
-    available = event.total_tickets - total_booked
+
+    available = max(event.total_tickets - total_booked, 0)
 
     if booking_data.ticket_quantity > available:
         raise HTTPException(
@@ -1073,71 +1421,251 @@ def create_booking(
             detail=f"Only {available} tickets are available"
         )
 
-    total_price = event.ticket_price * booking_data.ticket_quantity
+    total_price = round(
+        event.ticket_price * booking_data.ticket_quantity,
+        2
+    )
 
     new_booking = Booking(
         user_id=current_user.id,
         event_id=event.id,
         ticket_quantity=booking_data.ticket_quantity,
         total_price=total_price,
-        booking_status="CONFIRMED"
+        coupon_id=None,
+        discount_amount=0,
+        final_amount=total_price,
+        booking_status="PENDING"
     )
 
     db.add(new_booking)
     db.commit()
     db.refresh(new_booking)
 
-    ticket_code = f"TKT-{uuid.uuid4().hex[:8].upper()}"
-    qr_code_url = generate_ticket_qr(ticket_code)
+    return new_booking
 
-    new_ticket = Ticket(
-        booking_id=new_booking.id,
-        ticket_code=ticket_code,
-        qr_code_url=qr_code_url
+
+
+# ============================================================
+# MODULE 12 + 13 - PROCESS SIMULATED PAYMENT
+# ============================================================
+
+@app.post(
+    "/payments",
+    response_model=PaymentResponse,
+    status_code=status.HTTP_201_CREATED
+)
+def process_payment(
+    payment_data: PaymentCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    booking = db.query(Booking).filter(
+        Booking.id == payment_data.booking_id
+    ).first()
+
+    if booking is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
+
+    if booking.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can pay only for your own booking"
+        )
+
+    if booking.booking_status == "CANCELLED":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot pay for a cancelled booking"
+        )
+
+    if booking.booking_status == "CONFIRMED":
+        raise HTTPException(
+            status_code=400,
+            detail="Booking is already confirmed"
+        )
+
+    existing_success = db.query(Payment).filter(
+        Payment.booking_id == booking.id,
+        Payment.payment_status == "SUCCESS"
+    ).first()
+
+    if existing_success:
+        raise HTTPException(
+            status_code=400,
+            detail="This booking has already been paid"
+        )
+
+    coupon = None
+
+    if booking.coupon_id is not None:
+        coupon = db.query(Coupon).filter(
+            Coupon.id == booking.coupon_id
+        ).with_for_update().first()
+
+        if coupon is None or not coupon.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="The applied coupon is no longer available"
+            )
+
+        if coupon.expiry_date <= datetime.utcnow():
+            raise HTTPException(
+                status_code=400,
+                detail="The applied coupon has expired"
+            )
+
+        if coupon.usage_count >= coupon.usage_limit:
+            raise HTTPException(
+                status_code=400,
+                detail="Coupon usage limit has been reached"
+            )
+
+        if booking.total_price < coupon.minimum_booking_amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Booking no longer meets coupon minimum amount"
+            )
+
+        if coupon.discount_type == "PERCENTAGE":
+            discount = (
+                booking.total_price * coupon.discount_value / 100
+            )
+        else:
+            discount = coupon.discount_value
+
+        discount = min(discount, booking.total_price)
+
+        booking.discount_amount = round(discount, 2)
+        booking.final_amount = round(
+            booking.total_price - discount,
+            2
+        )
+    else:
+        booking.discount_amount = 0
+        booking.final_amount = booking.total_price
+
+    payable_amount = round(booking.final_amount, 2)
+
+    payment = Payment(
+        booking_id=booking.id,
+        payment_method=payment_data.payment_method,
+        payment_status="PENDING",
+        amount=payable_amount
     )
 
-    db.add(new_ticket)
+    db.add(payment)
+    db.flush()
+
+    # Simulated failed payment
+    if payment_data.simulate_status == "FAILED":
+        payment.payment_status = "FAILED"
+
+        db.add(Notification(
+            user_id=current_user.id,
+            title="Payment Failed",
+            message=(
+                f"Payment of ₹{payable_amount:.2f} for booking "
+                f"{booking.id} failed. Please try again."
+            ),
+            notification_type="PAYMENT",
+            type="PAYMENT",
+            is_read=False
+        ))
+
+        try:
+            db.commit()
+            db.refresh(payment)
+        except Exception:
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to save payment failure"
+            )
+
+        return payment
+
+    # Simulated successful payment
+    payment.payment_status = "SUCCESS"
+    payment.transaction_id = f"DEMO-{uuid.uuid4().hex.upper()}"
+
+    booking.booking_status = "CONFIRMED"
+
+    if coupon is not None:
+        coupon.usage_count += 1
+
+    ticket = db.query(Ticket).filter(
+        Ticket.booking_id == booking.id
+    ).first()
+
+    if ticket is None:
+        ticket_code = f"TKT-{uuid.uuid4().hex[:8].upper()}"
+
+        ticket = Ticket(
+            booking_id=booking.id,
+            ticket_code=ticket_code,
+            qr_code_url=generate_ticket_qr(ticket_code)
+        )
+
+        db.add(ticket)
+
+    event = db.query(Event).filter(
+        Event.id == booking.event_id
+    ).first()
+
+    event_title = event.title if event else "your event"
+
+    message = (
+        f"Payment of ₹{payable_amount:.2f} for booking "
+        f"{booking.id} was successful. "
+        f"Your booking for {event_title} is confirmed."
+    )
+
+    if booking.discount_amount > 0:
+        message += (
+            f" You saved ₹{booking.discount_amount:.2f} "
+            "with your coupon."
+        )
 
     db.add(Notification(
         user_id=current_user.id,
-        title="Booking Confirmed",
-        message=f"Your ticket for {event.title} has been successfully booked.",
-        type="BOOKING",
+        title="Payment Successful",
+        message=message,
+        type="PAYMENT",
+        notification_type="PAYMENT",
         is_read=False
     ))
 
-    db.commit()
-    db.refresh(new_ticket)
+    
+    try:
+        db.commit()
+        db.refresh(payment)
+    except Exception as e:
+        print("PAYMENT COMMIT ERROR:", repr(e))
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Payment processing failed. "
+                "Check the backend terminal for the actual error."
+            )
+        )
 
-    return {
-        "id": new_booking.id,
-        "user_id": new_booking.user_id,
-        "event_id": new_booking.event_id,
-        "ticket_quantity": new_booking.ticket_quantity,
-        "total_price": new_booking.total_price,
-        "booking_status": new_booking.booking_status,
-        "created_at": new_booking.created_at,
-        "ticket": {
-            "id": new_ticket.id,
-            "booking_id": new_ticket.booking_id,
-            "ticket_code": new_ticket.ticket_code,
-            "qr_code_url": new_ticket.qr_code_url,
-            "created_at": new_ticket.created_at,
-            "event": {
-                "id": event.id,
-                "title": event.title,
-                "location": event.location,
-                "event_date": event.event_date
-            }
-        }
-    }
+    return payment
+
+
 
 
 # ============================================================
 # BOOKINGS - MY BOOKINGS
 # ============================================================
 
-@app.get("/bookings/my-bookings", response_model=list[BookingResponse])
+@app.get(
+    "/bookings/my-bookings",
+    response_model=list[BookingResponse]
+)
 def get_my_bookings(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -1165,7 +1693,10 @@ def cancel_booking(
     ).first()
 
     if booking is None:
-        raise HTTPException(status_code=404, detail="Booking not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
 
     if booking.user_id != current_user.id:
         raise HTTPException(
@@ -1179,39 +1710,39 @@ def cancel_booking(
             detail="Booking is already cancelled"
         )
 
+    event = db.query(Event).filter(
+        Event.id == booking.event_id
+    ).first()
+
+    if event and event.event_status == "COMPLETED":
+        raise HTTPException(
+            status_code=400,
+            detail="A completed event booking cannot be cancelled"
+        )
+
     booking.booking_status = "CANCELLED"
-    db.commit()
-    db.refresh(booking)
+
+    try:
+        db.commit()
+        db.refresh(booking)
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to cancel booking"
+        )
 
     return booking
-
-
-# ============================================================
-# QR CODE GENERATION
-# ============================================================
-
-def generate_ticket_qr(ticket_code: str):
-    qr = qrcode.make(ticket_code)
-
-    qr_folder = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "qr_codes"
-    )
-    os.makedirs(qr_folder, exist_ok=True)
-
-    file_name = f"{ticket_code}.png"
-    file_path = os.path.join(qr_folder, file_name)
-
-    qr.save(file_path)
-
-    return f"/qr_codes/{file_name}"
 
 
 # ============================================================
 # TICKETS - MY TICKETS
 # ============================================================
 
-@app.get("/tickets/my-tickets", response_model=list[TicketResponse])
+@app.get(
+    "/tickets/my-tickets",
+    response_model=list[TicketResponse]
+)
 def get_my_tickets(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -1220,7 +1751,10 @@ def get_my_tickets(
         db.query(Ticket, Event)
         .join(Booking, Ticket.booking_id == Booking.id)
         .join(Event, Booking.event_id == Event.id)
-        .filter(Booking.user_id == current_user.id)
+        .filter(
+            Booking.user_id == current_user.id,
+            Booking.booking_status == "CONFIRMED"
+        )
         .all()
     )
 
@@ -1258,17 +1792,26 @@ def verify_ticket(
     ).first()
 
     if ticket is None:
-        raise HTTPException(status_code=404, detail="Invalid ticket")
+        raise HTTPException(
+            status_code=404,
+            detail="Invalid ticket"
+        )
 
     booking = db.query(Booking).filter(
         Booking.id == ticket.booking_id
     ).first()
 
     if booking is None:
-        raise HTTPException(status_code=404, detail="Booking not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Booking not found"
+        )
 
-    if booking.booking_status == "CANCELLED":
-        raise HTTPException(status_code=400, detail="Ticket is cancelled")
+    if booking.booking_status != "CONFIRMED":
+        raise HTTPException(
+            status_code=400,
+            detail="Ticket is not confirmed"
+        )
 
     event = db.query(Event).filter(
         Event.id == booking.event_id
@@ -1294,7 +1837,10 @@ def verify_ticket(
 # NOTIFICATIONS - MY NOTIFICATIONS
 # ============================================================
 
-@app.get("/notifications", response_model=list[NotificationResponse])
+@app.get(
+    "/notifications",
+    response_model=list[NotificationResponse]
+)
 def get_my_notifications(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -1304,6 +1850,24 @@ def get_my_notifications(
     ).order_by(
         Notification.created_at.desc()
     ).all()
+
+
+
+# ============================================================
+# NOTIFICATIONS - UNREAD COUNT
+# ============================================================
+
+@app.get("/notifications/unread-count")
+def get_unread_notification_count(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    count = db.query(Notification).filter(
+        Notification.user_id == current_user.id,
+        Notification.is_read == False
+    ).count()
+
+    return {"unread_count": count}
 
 
 # ============================================================
@@ -1317,7 +1881,6 @@ async def event_reminder_checker():
         try:
             now = datetime.utcnow()
 
-            # 1. Automatically refresh all event statuses.
             all_events = db.query(Event).all()
 
             for event in all_events:
@@ -1325,7 +1888,6 @@ async def event_reminder_checker():
 
             db.commit()
 
-            # 2. Send reminders for events about 24 hours away.
             reminder_start = now + timedelta(hours=23)
             reminder_end = now + timedelta(hours=25)
 
@@ -1357,6 +1919,7 @@ async def event_reminder_checker():
                                 "is coming up soon."
                             ),
                             type="EVENT",
+                            notification_type="EVENT",
                             is_read=False
                         ))
 
@@ -1400,4 +1963,224 @@ def mark_notification_as_read(
     return {
         "message": "Notification marked as read",
         "notification": notification
+    }
+
+
+
+# ============================================================
+# NOTIFICATIONS - MARK ALL AS READ
+# ============================================================
+
+@app.put("/notifications/read-all")
+def mark_all_notifications_as_read(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    updated_count = db.query(Notification).filter(
+        Notification.user_id == current_user.id,
+        Notification.is_read == False
+    ).update(
+        {Notification.is_read: True},
+        synchronize_session=False
+    )
+
+    db.commit()
+
+    return {
+        "message": "All notifications marked as read",
+        "updated_count": updated_count
+    }
+
+
+# ============================================================
+# MODULE 14 - EVENT FEEDBACK & RATINGS
+# ============================================================
+
+from sqlalchemy import func
+from fastapi import HTTPException, Depends
+from sqlalchemy.orm import Session
+from datetime import datetime
+
+from models import Review
+from schemas import ReviewCreate, ReviewResponse, ReviewListResponse
+
+
+# ------------------------------------------------------------
+# SUBMIT A REVIEW
+# POST /events/{event_id}/reviews
+# ------------------------------------------------------------
+
+@app.post("/events/{event_id}/reviews", response_model=ReviewResponse)
+def create_event_review(
+    event_id: int,
+    review_data: ReviewCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Check whether the event exists
+    event = db.query(Event).filter(Event.id == event_id).first()
+
+    if not event:
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
+
+    # The user must have a confirmed booking
+    booking = db.query(Booking).filter(
+        Booking.user_id == current_user.id,
+        Booking.event_id == event_id,
+        Booking.booking_status == "CONFIRMED"
+    ).first()
+
+    if not booking:
+        raise HTTPException(
+            status_code=403,
+            detail="You must have a confirmed booking to review this event"
+        )
+
+    # Reviews are allowed only after the event has finished
+    if event.event_status != "COMPLETED":
+        raise HTTPException(
+            status_code=400,
+            detail="You can review this event only after it is completed"
+        )
+
+    # Allow only one review per user for each event
+    existing_review = db.query(Review).filter(
+        Review.user_id == current_user.id,
+        Review.event_id == event_id
+    ).first()
+
+    if existing_review:
+        raise HTTPException(
+            status_code=400,
+            detail="You have already reviewed this event. You can edit your existing review."
+        )
+
+    new_review = Review(
+        user_id=current_user.id,
+        event_id=event_id,
+        rating=review_data.rating,
+        review_text=review_data.review_text
+    )
+
+    db.add(new_review)
+    db.commit()
+    db.refresh(new_review)
+
+    return new_review
+
+
+# ------------------------------------------------------------
+# FETCH REVIEWS AND AVERAGE RATING
+# GET /events/{event_id}/reviews
+# ------------------------------------------------------------
+
+@app.get(
+    "/events/{event_id}/reviews",
+    response_model=ReviewListResponse
+)
+def get_event_reviews(
+    event_id: int,
+    db: Session = Depends(get_db)
+):
+    # Check whether the event exists
+    event = db.query(Event).filter(Event.id == event_id).first()
+
+    if not event:
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found"
+        )
+
+    reviews = db.query(Review).filter(
+        Review.event_id == event_id
+    ).order_by(Review.created_at.desc()).all()
+
+    average_rating = db.query(
+        func.avg(Review.rating)
+    ).filter(
+        Review.event_id == event_id
+    ).scalar()
+
+    return {
+        "event_id": event_id,
+        "average_rating": round(float(average_rating), 2) if average_rating is not None else 0.0,
+        "total_reviews": len(reviews),
+        "reviews": reviews
+    }
+
+
+# ------------------------------------------------------------
+# EDIT YOUR OWN REVIEW
+# PUT /reviews/{review_id}
+# ------------------------------------------------------------
+
+@app.put("/reviews/{review_id}", response_model=ReviewResponse)
+def update_event_review(
+    review_id: int,
+    review_data: ReviewCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    review = db.query(Review).filter(
+        Review.id == review_id
+    ).first()
+
+    if not review:
+        raise HTTPException(
+            status_code=404,
+            detail="Review not found"
+        )
+
+    # Users can edit only their own reviews
+    if review.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can edit only your own reviews"
+        )
+
+    review.rating = review_data.rating
+    review.review_text = review_data.review_text
+
+    db.commit()
+    db.refresh(review)
+
+    return review
+
+
+# ------------------------------------------------------------
+# DELETE YOUR OWN REVIEW
+# DELETE /reviews/{review_id}
+# ------------------------------------------------------------
+
+@app.delete("/reviews/{review_id}")
+def delete_event_review(
+    review_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    review = db.query(Review).filter(
+        Review.id == review_id
+    ).first()
+
+    if not review:
+        raise HTTPException(
+            status_code=404,
+            detail="Review not found"
+        )
+
+    # Users can delete only their own reviews
+    if review.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can delete only your own reviews"
+        )
+
+    db.delete(review)
+    db.commit()
+
+    return {
+        "message": "Review deleted successfully"
     }

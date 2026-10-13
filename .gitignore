@@ -1,0 +1,23 @@
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# React / Node
+node_modules/
+dist/
+
+# Generated QR codes
+backend/qr_codes/

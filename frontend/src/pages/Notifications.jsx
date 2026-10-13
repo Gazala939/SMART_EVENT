@@ -1,5 +1,6 @@
+
 import { useEffect, useState } from "react";
-import axios from "axios";
+import api from "../api";
 
 function Notifications() {
   const [notifications, setNotifications] = useState([]);
@@ -7,24 +8,14 @@ function Notifications() {
   const [error, setError] = useState("");
 
   const getNotifications = async () => {
-    const token = localStorage.getItem("token");
-
     setLoading(true);
     setError("");
 
     try {
-      const response = await axios.get(
-        "http://127.0.0.1:8000/notifications",
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      setNotifications(response.data);
+      const response = await api.get("/notifications");
+      setNotifications(response.data || []);
     } catch (error) {
-      console.log(error);
+      console.error("Error fetching notifications:", error);
       setError("Unable to load notifications.");
     } finally {
       setLoading(false);
@@ -36,23 +27,26 @@ function Notifications() {
   }, []);
 
   const markAsRead = async (notificationId) => {
-    const token = localStorage.getItem("token");
-
     try {
-      await axios.put(
-        `http://127.0.0.1:8000/notifications/${notificationId}/read`,
-        {},
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+      await api.put(
+        `/notifications/${notificationId}/read`,
+        {}
       );
 
-      getNotifications();
+      await getNotifications();
     } catch (error) {
-      console.log(error);
+      console.error("Error marking notification as read:", error);
       setError("Unable to mark notification as read.");
+    }
+  };
+
+  const markAllAsRead = async () => {
+    try {
+      await api.put("/notifications/read-all", {});
+      await getNotifications();
+    } catch (error) {
+      console.error("Error marking all notifications as read:", error);
+      setError("Unable to mark all notifications as read.");
     }
   };
 
@@ -68,7 +62,6 @@ function Notifications() {
     return (
       <div className="notifications-container">
         <h2>{error}</h2>
-
         <button
           className="notification-retry-button"
           onClick={getNotifications}
@@ -79,9 +72,19 @@ function Notifications() {
     );
   }
 
+  const unreadCount = notifications.filter(
+    (notification) => !notification.is_read
+  ).length;
+
   return (
     <div className="notifications-container">
       <h1>Notifications</h1>
+
+      {unreadCount > 0 && (
+        <button onClick={markAllAsRead}>
+          Mark All as Read ({unreadCount})
+        </button>
+      )}
 
       {notifications.length === 0 ? (
         <p>No notifications found.</p>
@@ -94,34 +97,26 @@ function Notifications() {
             }`}
           >
             <h3>{notification.title}</h3>
-
             <p>{notification.message}</p>
 
             <p>
-              <strong>Type:</strong> {notification.type}
+              <strong>Type:</strong>{" "}
+              {notification.notification_type || notification.type}
             </p>
 
             <p>
               <strong>Date:</strong>{" "}
-              {new Date(
-                notification.created_at
-              ).toLocaleString()}
+              {new Date(notification.created_at).toLocaleString()}
             </p>
 
-            {!notification.is_read && (
+            {!notification.is_read ? (
               <button
-                onClick={() =>
-                  markAsRead(notification.id)
-                }
+                onClick={() => markAsRead(notification.id)}
               >
                 Mark as Read
               </button>
-            )}
-
-            {notification.is_read && (
-              <span className="read-text">
-                ✓ Read
-              </span>
+            ) : (
+              <span className="read-text">✓ Read</span>
             )}
           </div>
         ))
