@@ -1,11 +1,93 @@
 
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import api from "../api";
 
 function EventCard({ event }) {
   const navigate = useNavigate();
 
+  const [isWishlisted, setIsWishlisted] = useState(false);
+  const [wishlistLoading, setWishlistLoading] = useState(false);
+
   const status = event.event_status || "UPCOMING";
   const statusClass = status.toLowerCase();
+
+  // Check whether this event is already in the user's wishlist
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkWishlist = async () => {
+      const token = localStorage.getItem("token");
+
+      // Wishlist is available only to logged-in users
+      if (!token || !event?.id) {
+        setIsWishlisted(false);
+        return;
+      }
+
+      try {
+        const response = await api.get("/wishlist");
+
+        const wishlistItems = Array.isArray(response.data)
+          ? response.data
+          : [];
+
+        const exists = wishlistItems.some(
+          (item) => Number(item.event_id) === Number(event.id)
+        );
+
+        if (!cancelled) {
+          setIsWishlisted(exists);
+        }
+      } catch (error) {
+        console.error("Unable to check wishlist:", error);
+      }
+    };
+
+    checkWishlist();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [event?.id]);
+
+  // Add or remove this event from the wishlist
+  const handleWishlist = async () => {
+    if (!localStorage.getItem("token")) {
+      navigate("/login");
+      return;
+    }
+
+    if (wishlistLoading || !event?.id) return;
+
+    setWishlistLoading(true);
+
+    try {
+      if (isWishlisted) {
+        await api.delete(`/wishlist/${event.id}`);
+        setIsWishlisted(false);
+      } else {
+        await api.post("/wishlist", {
+          event_id: Number(event.id),
+        });
+        setIsWishlisted(true);
+      }
+    } catch (error) {
+      console.error("Unable to update wishlist:", error);
+
+      const message =
+        error.response?.data?.detail ||
+        "Could not update your wishlist. Please try again.";
+
+      alert(
+        typeof message === "string"
+          ? message
+          : "Could not update your wishlist. Please try again."
+      );
+    } finally {
+      setWishlistLoading(false);
+    }
+  };
 
   const formattedDate = event.event_date
     ? new Date(event.event_date).toLocaleString("en-IN", {
@@ -47,6 +129,28 @@ function EventCard({ event }) {
             {event.category}
           </span>
         )}
+
+        <button
+          type="button"
+          className={`wishlist-button ${
+            isWishlisted ? "wishlisted" : ""
+          }`}
+          onClick={handleWishlist}
+          disabled={wishlistLoading}
+          aria-label={
+            isWishlisted
+              ? "Remove event from wishlist"
+              : "Add event to wishlist"
+          }
+          aria-pressed={isWishlisted}
+          title={
+            isWishlisted
+              ? "Remove from wishlist"
+              : "Add to wishlist"
+          }
+        >
+          {wishlistLoading ? "…" : isWishlisted ? "♥" : "♡"}
+        </button>
       </div>
 
       <div className="event-card-content">
@@ -86,7 +190,7 @@ function EventCard({ event }) {
             type="button"
             className="event-details-button"
             onClick={() => navigate(`/events/${event.id}`)}
-            aria-label={`View details for ${event.title}`}
+            aria-label={`View details for ${event.title || "event"}`}
           >
             View Details <span aria-hidden="true">→</span>
           </button>

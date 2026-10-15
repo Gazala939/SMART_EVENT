@@ -49,6 +49,9 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: str
     created_at: datetime
+    
+    profile_picture: str | None = None
+    location: str | None = None
 
     class Config:
         from_attributes = True
@@ -356,3 +359,89 @@ class ReviewListResponse(BaseModel):
     total_reviews: int
     reviews: list[ReviewResponse]
 
+
+# ============================================================
+# MODULE 20 - WISHLIST SCHEMAS
+# ============================================================
+
+class WishlistCreate(BaseModel):
+    event_id: int = Field(gt=0)
+
+
+class WishlistResponse(BaseModel):
+    id: int
+    user_id: int
+    event_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================
+# MODULE 21 - EVENT UPDATE SCHEMAS
+# ============================================================
+
+class EventUpdateCreate(BaseModel):
+    message: str = Field(min_length=3, max_length=2000)
+    is_important: bool = False
+
+
+class EventUpdateResponse(BaseModel):
+    id: int
+    event_id: int
+    message: str
+    is_important: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================
+# MODULE 22 - PROFILE SCHEMAS
+# ============================================================
+
+class ProfileUpdate(BaseModel):
+    username: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=50
+    )
+
+    email: EmailStr | None = None
+
+    profile_picture: str | None = Field(
+        default=None,
+        max_length=500
+    )
+    
+    location: str | None = Field(
+        default=None,
+        max_length=200
+    )
+
+
+class ProfileSummaryResponse(BaseModel):
+    total_bookings: int
+    confirmed_bookings: int
+    cancelled_bookings: int
+    total_tickets: int
+    total_spent: float
+
+
+# ============================================================
+# MODULE 24 - CHATBOT SCHEMAS
+# ============================================================
+
+class ChatbotRequest(BaseModel):
+    message: str = Field(
+        min_length=2,
+        max_length=1000
+    )
+
+
+class ChatbotResponse(BaseModel):
+    answer: str
+    intent: str = "general"
+    events: list[EventResponse] = Field(default_factory=list)

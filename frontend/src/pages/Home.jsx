@@ -1,26 +1,38 @@
 
-import { useEffect, useState } from "react";
-import axios from "axios";
+import { useEffect, useState, useCallback } from "react";
+import { Link, useLocation } from "react-router-dom";
+import api from "../api";
 import EventCard from "../components/EventCard";
 import EventCardSkeleton from "../components/EventCardSkeleton";
 import "../components/EventCardSkeleton.css";
 import "./Home.css";
 
 function Home() {
+  const currentRoute = useLocation();
+
   const [events, setEvents] = useState([]);
+  const [trendingEvents, setTrendingEvents] = useState([]);
+  const [recommendedEvents, setRecommendedEvents] = useState([]);
+
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [location, setLocation] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
   const [sortBy, setSortBy] = useState("date");
   const [sortOrder, setSortOrder] = useState("asc");
 
+ 
+
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [recommendationsLoading, setRecommendationsLoading] =
+    useState(true);
 
-  // Fetch events using search and filter values
-  const fetchEvents = async (overrides = {}) => {
+  // Fetch events using all selected filters.
+  const fetchEvents = useCallback(async (overrides = {}) => {
     setLoading(true);
     setErrorMessage("");
 
@@ -31,25 +43,22 @@ function Home() {
         location: location.trim(),
         start_date: startDate,
         end_date: endDate,
+        min_price: minPrice,
+        max_price: maxPrice,
         sort_by: sortBy,
         sort_order: sortOrder,
         ...overrides,
       };
 
       Object.keys(params).forEach((key) => {
-        if (params[key] === "") {
+        if (params[key] === "" || params[key] == null) {
           delete params[key];
         }
       });
 
-      const response = await axios.get(
-        "http://127.0.0.1:8000/events/search",
-        { params }
-      );
+      const response = await api.get("/events/search", { params });
 
-      setEvents(
-        Array.isArray(response.data) ? response.data : []
-      );
+      setEvents(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
       console.error("Error fetching events:", error);
       setEvents([]);
@@ -60,84 +69,130 @@ function Home() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    search,
+    category,
+    location,
+    startDate,
+    endDate,
+    minPrice,
+    maxPrice,
+    sortBy,
+    sortOrder,
+  ]);
 
-  // Load events when Home opens
-  useEffect(() => {
-    const loadInitialEvents = async () => {
-      setLoading(true);
-      setErrorMessage("");
+  
+  // Load trending events and personalized recommendations.
+  const fetchDiscoverSections = useCallback(async () => {
+    setRecommendationsLoading(true);
 
+    try {
+      // Trending events can be loaded without logging in.
       try {
-        const response = await axios.get(
-          "http://127.0.0.1:8000/events"
-        );
-
-        setEvents(
-          Array.isArray(response.data) ? response.data : []
+        const trendingResponse = await api.get("/recommendations/trending");
+        setTrendingEvents(
+          Array.isArray(trendingResponse.data)
+            ? trendingResponse.data
+            : []
         );
       } catch (error) {
-        console.error("Error loading events:", error);
-        setEvents([]);
-        setErrorMessage(
-          "Unable to load events. Please check whether the backend is running."
-        );
-      } finally {
-        setLoading(false);
+        console.error("Unable to load trending events:", error);
+        setTrendingEvents([]);
       }
-    };
 
-    loadInitialEvents();
+      // Personalized recommendations require a logged-in user.
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        setRecommendedEvents([]);
+        return;
+      }
+
+      try {
+        const recommendedResponse = await api.get(
+          "/recommendations/for-me"
+        );
+
+        setRecommendedEvents(
+          Array.isArray(recommendedResponse.data)
+            ? recommendedResponse.data
+            : []
+        );
+      } catch (error) {
+        console.error(
+          "Unable to load personalized recommendations:",
+          error
+        );
+        setRecommendedEvents([]);
+      }
+    } finally {
+      setRecommendationsLoading(false);
+    }
   }, []);
 
-  const handleSearch = (e) => {
-    e.preventDefault();
+
+  // Initial page loading.
+  useEffect(() => {
+    fetchEvents();
+    fetchDiscoverSections();
+  }, [location.pathname, fetchEvents, fetchDiscoverSections]);
+
+  const handleSearch = (event) => {
+    event.preventDefault();
     fetchEvents();
   };
 
-  const handleCategory = (newCategory) => {
-    setCategory(newCategory);
-    fetchEvents({ category: newCategory });
+  const handleApplyFilters = () => {
+    if (
+      minPrice !== "" &&
+      maxPrice !== "" &&
+      Number(minPrice) > Number(maxPrice)
+    ) {
+      setErrorMessage(
+        "Minimum price cannot be greater than maximum price."
+      );
+      return;
+    }
+
+    if (startDate && endDate && startDate > endDate) {
+      setErrorMessage(
+        "End date cannot be earlier than start date."
+      );
+      return;
+    }
+
+    fetchEvents();
   };
 
-  const handleClearFilters = async () => {
+  
+  const handleCategory = (newCategory) => {
+    setCategory(newCategory);
+  };
+
+
+  const handleClearFilters = () => {
     setSearch("");
     setCategory("");
     setLocation("");
     setStartDate("");
     setEndDate("");
+    setMinPrice("");
+    setMaxPrice("");
     setSortBy("date");
     setSortOrder("asc");
 
-    setLoading(true);
-    setErrorMessage("");
-
-    try {
-      const response = await axios.get(
-        "http://127.0.0.1:8000/events"
-      );
-
-      setEvents(
-        Array.isArray(response.data) ? response.data : []
-      );
-    } catch (error) {
-      console.error("Error loading events:", error);
-      setEvents([]);
-      setErrorMessage("Unable to load events. Please try again.");
-    } finally {
-      setLoading(false);
-    }
+    fetchEvents({
+      title: "",
+      category: "",
+      location: "",
+      start_date: "",
+      end_date: "",
+      min_price: "",
+      max_price: "",
+      sort_by: "date",
+      sort_order: "asc",
+    });
   };
-
-  const featuredEvents = events
-    .filter((event) => {
-      const status = (
-        event.event_status || "UPCOMING"
-      ).toUpperCase();
-
-      return status !== "CANCELLED" && status !== "COMPLETED";
-    })
-    .slice(0, 3);
 
   const categories = [
     "All",
@@ -147,9 +202,23 @@ function Home() {
     "Business",
   ];
 
+  const renderEventCards = (items, emptyMessage) => {
+    if (items.length === 0) {
+      return <p className="empty-state">{emptyMessage}</p>;
+    }
+
+    return (
+      <div className="event-list-grid">
+        {items.map((event) => (
+          <EventCard key={event.id} event={event} />
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="home-container">
-      {/* 1. Hero Section */}
+      {/* HERO SECTION */}
       <section className="hero-section">
         <div className="hero-content">
           <span className="hero-eyebrow">
@@ -183,24 +252,21 @@ function Home() {
         </div>
       </section>
 
-      {/* 2. Search Bar */}
-      <form
-        className="search-container"
-        onSubmit={handleSearch}
-      >
+      {/* SEARCH */}
+      <form className="search-container" onSubmit={handleSearch}>
         <input
           id="event-search"
           type="text"
           placeholder="Search by event name..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(event) => setSearch(event.target.value)}
           autoComplete="off"
         />
 
         <button type="submit">Search</button>
       </form>
 
-      {/* 3. Category Buttons */}
+      {/* CATEGORY FILTERS */}
       <div className="category-container">
         {categories.map((item) => {
           const value = item === "All" ? "" : item;
@@ -222,34 +288,68 @@ function Home() {
         })}
       </div>
 
-      {/* 4. Featured Events */}
-      {!loading &&
-        !errorMessage &&
-        featuredEvents.length > 0 && (
-          <section className="featured-section">
-            <div className="featured-heading">
-              <div>
-                <span className="featured-eyebrow">
-                  HANDPICKED FOR YOU
-                </span>
+      {/* MODULE 19: TRENDING EVENTS */}
+      <section className="featured-section">
+        <div className="featured-heading">
+          <div>
+            <span className="featured-eyebrow">POPULAR RIGHT NOW</span>
+            <h2>Trending Events 🔥</h2>
+            <p>Explore events attracting attention from attendees.</p>
+          </div>
+        </div>
 
-                <h2>Featured Events</h2>
-
-                <p>
-                  Discover experiences worth looking forward to.
-                </p>
-              </div>
-            </div>
-
-            <div className="featured-grid">
-              {featuredEvents.map((event) => (
-                <EventCard key={event.id} event={event} />
-              ))}
-            </div>
-          </section>
+        {recommendationsLoading ? (
+          <div className="event-list-grid">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <EventCardSkeleton key={index} />
+            ))}
+          </div>
+        ) : (
+          renderEventCards(
+            trendingEvents,
+            "No trending events are available right now."
+          )
         )}
+      </section>
 
-      {/* 5. Filters */}
+      {/* MODULE 19: PERSONALIZED RECOMMENDATIONS */}
+      <section className="featured-section">
+        <div className="featured-heading">
+          <div>
+            <span className="featured-eyebrow">PICKED FOR YOUR INTERESTS</span>
+            <h2>Recommended for You ✨</h2>
+            <p>
+              Suggestions based on your event interests and booking activity.
+            </p>
+          </div>
+        </div>
+
+        {recommendationsLoading ? (
+          <div className="event-list-grid">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <EventCardSkeleton key={index} />
+            ))}
+          </div>
+        ) : recommendedEvents.length > 0 ? (
+          renderEventCards(recommendedEvents, "")
+        ) : (
+          <div className="empty-state">
+            <p>
+              {localStorage.getItem("token")
+                ? "We don't have personalized suggestions for you yet. Explore events and book one to help us learn your interests."
+                : "Log in to discover event recommendations tailored to your interests."}
+            </p>  
+            {localStorage.getItem("token") ? (
+              <Link to="/booking-history">View My Bookings</Link>
+            ) : (
+              <Link to="/login">Log In</Link>
+            )}
+
+          </div>
+        )}
+      </section>
+
+      {/* MODULE 23: ADVANCED FILTERS */}
       <aside className="event-filters">
         <h2>Filter Events</h2>
 
@@ -259,7 +359,7 @@ function Home() {
           type="text"
           placeholder="Enter location"
           value={location}
-          onChange={(e) => setLocation(e.target.value)}
+          onChange={(event) => setLocation(event.target.value)}
         />
 
         <label htmlFor="filter-start-date">Start Date</label>
@@ -267,7 +367,7 @@ function Home() {
           id="filter-start-date"
           type="date"
           value={startDate}
-          onChange={(e) => setStartDate(e.target.value)}
+          onChange={(event) => setStartDate(event.target.value)}
         />
 
         <label htmlFor="filter-end-date">End Date</label>
@@ -276,14 +376,34 @@ function Home() {
           type="date"
           min={startDate || undefined}
           value={endDate}
-          onChange={(e) => setEndDate(e.target.value)}
+          onChange={(event) => setEndDate(event.target.value)}
+        />
+
+        <label htmlFor="filter-min-price">Minimum Ticket Price (₹)</label>
+        <input
+          id="filter-min-price"
+          type="number"
+          min="0"
+          placeholder="Minimum price"
+          value={minPrice}
+          onChange={(event) => setMinPrice(event.target.value)}
+        />
+
+        <label htmlFor="filter-max-price">Maximum Ticket Price (₹)</label>
+        <input
+          id="filter-max-price"
+          type="number"
+          min="0"
+          placeholder="Maximum price"
+          value={maxPrice}
+          onChange={(event) => setMaxPrice(event.target.value)}
         />
 
         <label htmlFor="filter-sort">Sort By</label>
         <select
           id="filter-sort"
           value={sortBy}
-          onChange={(e) => setSortBy(e.target.value)}
+          onChange={(event) => setSortBy(event.target.value)}
         >
           <option value="date">Event Date</option>
           <option value="price">Ticket Price</option>
@@ -294,13 +414,13 @@ function Home() {
         <select
           id="filter-order"
           value={sortOrder}
-          onChange={(e) => setSortOrder(e.target.value)}
+          onChange={(event) => setSortOrder(event.target.value)}
         >
           <option value="asc">Ascending</option>
           <option value="desc">Descending</option>
         </select>
 
-        <button type="button" onClick={() => fetchEvents()}>
+        <button type="button" onClick={handleApplyFilters}>
           Apply Filters
         </button>
 
@@ -309,15 +429,14 @@ function Home() {
         </button>
       </aside>
 
-      {/* 6. All Events */}
+      {/* ALL EVENTS */}
       <section className="event-grid" id="event-list">
         <div className="event-list-heading">
           <h2>Explore All Events</h2>
 
           {!loading && !errorMessage && (
             <p>
-              {events.length}{" "}
-              {events.length === 1 ? "event" : "events"} found
+              {events.length} {events.length === 1 ? "event" : "events"} found
             </p>
           )}
         </div>
@@ -330,16 +449,11 @@ function Home() {
           </div>
         ) : errorMessage ? (
           <p className="error-message">{errorMessage}</p>
-        ) : events.length === 0 ? (
-          <p className="empty-state">
-            No events found. Try changing your search or filters.
-          </p>
         ) : (
-          <div className="event-list-grid">
-            {events.map((event) => (
-              <EventCard key={event.id} event={event} />
-            ))}
-          </div>
+          renderEventCards(
+            events,
+            "No events found. Try changing your search or filters."
+          )
         )}
       </section>
     </div>

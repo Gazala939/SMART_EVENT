@@ -30,6 +30,8 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(20), default="USER", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    profile_picture = Column(String(500), nullable=True)
+    location = Column(String(200), nullable=True)
 
 
 # ============================================================
@@ -262,6 +264,77 @@ class Review(Base):
     review_text = Column(String(2000), nullable=True)
 
     # Review creation time
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
+    )
+
+
+# ============================================================
+# MODULE 20: WISHLIST MODEL
+# ============================================================
+
+class Wishlist(Base):
+    __tablename__ = "wishlists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+    event_id = Column(
+        Integer,
+        ForeignKey("events.id"),
+        nullable=False,
+        index=True
+    )
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
+    )
+    
+
+# MODULE 19: Track events viewed by users
+class ViewedEvent(Base):
+    __tablename__ = "viewed_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True
+    )
+    event_id = Column(
+        Integer,
+        ForeignKey("events.id"),
+        nullable=False,
+        index=True
+    )
+    viewed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+
+# ============================================================
+# MODULE 21: EVENT UPDATES MODEL
+# ============================================================
+
+class EventUpdate(Base):
+    __tablename__ = "event_updates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(
+        Integer,
+        ForeignKey("events.id"),
+        nullable=False,
+        index=True
+    )
+    message = Column(String(2000), nullable=False)
+    is_important = Column(Boolean, default=False, nullable=False)
     created_at = Column(
         DateTime,
         default=datetime.utcnow,

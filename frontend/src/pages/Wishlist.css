@@ -1,0 +1,140 @@
+
+.wishlist-page {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 20px;
+  box-sizing: border-box;
+}
+
+.wishlist-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.wishlist-heading h1 {
+  margin: 0 0 8px;
+  font-size: 30px;
+}
+
+.wishlist-heading p {
+  margin: 0;
+  color: #666;
+}
+
+.wishlist-browse-button,
+.wishlist-empty button,
+.wishlist-page > button {
+  border: none;
+  border-radius: 8px;
+  padding: 11px 18px;
+  background: #2563eb;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wishlist-count {
+  margin-bottom: 20px;
+  color: #555;
+}
+
+.wishlist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 24px;
+  align-items: start;
+}
+
+.wishlist-item {
+  min-width: 0;
+}
+
+.wishlist-remove-button {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid #e11d48;
+  border-radius: 8px;
+  background: white;
+  color: #e11d48;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wishlist-remove-button:hover {
+  background: #fff1f2;
+}
+
+.wishlist-empty {
+  padding: 55px 20px;
+  text-align: center;
+  border: 1px dashed #ccc;
+  border-radius: 14px;
+}
+
+.wishlist-empty-icon {
+  color: #e11d48;
+  font-size: 55px;
+}
+
+.wishlist-empty h2 {
+  margin-bottom: 8px;
+}
+
+.wishlist-empty p {
+  margin-bottom: 22px;
+  color: #666;
+}
+
+.wishlist-error {
+  color: #dc2626;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 600px) {
+  .wishlist-page {
+    padding: 22px 14px;
+  }
+
+  .wishlist-heading h1 {
+    font-size: 25px;
+  }
+
+  .wishlist-browse-button {
+    width: 100%;
+  }
+}
+
+.wishlist-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.wishlist-book-button {
+  flex: 1;
+  min-width: 120px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.wishlist-book-button:hover {
+  background: #1d4ed8;
+}
+
+.wishlist-item-actions .wishlist-remove-button {
+  flex: 1;
+  margin: 0;
+}

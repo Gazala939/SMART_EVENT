@@ -170,6 +170,30 @@ function Navbar() {
           <button
             type="button"
             className={`navbar-link ${
+              isActive("/profile") ? "navbar-link-active" : ""
+            }`}
+            onClick={() => handleNavigate("/profile")}
+          >
+            <span aria-hidden="true">👤</span>
+            My Profile
+          </button>
+
+          
+
+          <button
+            type="button"
+            className={`navbar-link ${
+              isActive("/wishlist") ? "navbar-link-active" : ""
+            }`}
+            onClick={() => handleNavigate("/wishlist")}
+          >
+            <span aria-hidden="true">❤️</span>
+            Wishlist
+          </button>
+
+          <button
+            type="button"
+            className={`navbar-link ${
               isActive("/booking-history") ? "navbar-link-active" : ""
             }`}
             onClick={() => handleNavigate("/booking-history")}

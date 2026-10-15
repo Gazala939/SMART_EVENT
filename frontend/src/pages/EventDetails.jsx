@@ -13,6 +13,19 @@ function EventDetails() {
   const [quantity, setQuantity] = useState(1);
   const [bookingLoading, setBookingLoading] = useState(false);
 
+  // Module 18: Live ticket availability
+  const [availability, setAvailability] = useState(null);
+  const [availabilityLoading, setAvailabilityLoading] = useState(true);
+  const [availabilityError, setAvailabilityError] = useState("");
+
+  // Module 20: Wishlist
+  const [wishlistSaved, setWishlistSaved] = useState(false);
+  const [wishlistLoading, setWishlistLoading] = useState(false);
+
+  // Module 21: Event updates
+  const [eventUpdates, setEventUpdates] = useState([]);
+  const [updatesError, setUpdatesError] = useState("");
+
   // Review states
   const [reviews, setReviews] = useState([]);
   const [averageRating, setAverageRating] = useState(0);
@@ -26,6 +39,28 @@ function EventDetails() {
 
   // Logged-in user ID
   const currentUserId = Number(localStorage.getItem("user_id"));
+
+ 
+  // MODULE 19: Track viewed events for personalized recommendations
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+
+    // Only track views for logged-in users
+    if (!token || !event_id) {
+      return;
+    }
+
+    const trackEventView = async () => {
+      try {
+        await api.post(`/events/${event_id}/view`);
+      } catch (error) {
+        console.error("Unable to track event view:", error);
+      }
+    };
+
+    trackEventView();
+  }, [event_id]);
+
 
   // Fetch event details
   useEffect(() => {
@@ -60,6 +95,129 @@ function EventDetails() {
     };
   }, [event_id]);
 
+  // Module 18: Refresh ticket availability every 10 seconds
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchAvailability = async () => {
+      try {
+        const response = await api.get(
+          `/events/${event_id}/availability`
+        );
+
+        if (!cancelled) {
+          setAvailability(response.data);
+          setAvailabilityError("");
+        }
+      } catch (error) {
+        console.error("Error fetching ticket availability:", error);
+
+        if (!cancelled) {
+          setAvailabilityError(
+            "Unable to refresh availability. Please try again."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setAvailabilityLoading(false);
+        }
+      }
+    };
+
+    setAvailability(null);
+    setAvailabilityLoading(true);
+    setAvailabilityError("");
+
+    fetchAvailability();
+
+    const intervalId = setInterval(fetchAvailability, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [event_id]);
+
+    // Module 18: Receive live ticket availability through WebSocket
+  
+  useEffect(() => {
+    if (!event_id) return;
+
+    let websocket;
+    let reconnectTimer;
+    let isActive = true;
+
+    const connectWebSocket = () => {
+      if (!isActive) return;
+
+      websocket = new WebSocket(
+        `ws://127.0.0.1:8000/ws/events/${event_id}/availability`
+      );
+
+      websocket.onopen = () => {
+        console.log("Connected to live ticket availability.");
+      };
+
+      websocket.onmessage = (message) => {
+        try {
+          const data = JSON.parse(message.data);
+          setAvailability(data);
+          setAvailabilityError("");
+          setAvailabilityLoading(false);
+        } catch (error) {
+          console.error("Unable to read live availability:", error);
+        }
+      };
+
+      websocket.onerror = (error) => {
+        console.error("Availability WebSocket error:", error);
+      };
+
+      websocket.onclose = () => {
+        if (isActive) {
+          reconnectTimer = setTimeout(connectWebSocket, 3000);
+        }
+      };
+    };
+
+    connectWebSocket();
+
+    return () => {
+      isActive = false;
+      clearTimeout(reconnectTimer);
+
+      if (websocket) {
+        websocket.onclose = null;
+        websocket.close();
+      }
+    };
+  }, [event_id]);
+
+
+  // Module 18: Keep selected quantity within available seats
+  useEffect(() => {
+    const availableValue =
+      availability?.available_tickets ??
+      availability?.available ??
+      availability?.tickets_available;
+
+    if (availableValue === undefined || availableValue === null) {
+      return;
+    }
+
+    const remaining = Number(availableValue);
+
+    if (!Number.isFinite(remaining)) {
+      return;
+    }
+
+    if (remaining > 0 && quantity > remaining) {
+      setQuantity(Math.min(remaining, 10));
+    } else if (remaining === 0) {
+      setQuantity(1);
+    }
+  }, [availability, quantity]);
+
   // Fetch reviews and average rating
   const fetchReviews = async () => {
     try {
@@ -83,6 +241,103 @@ function EventDetails() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [event_id]);
 
+  // Module 20: Check whether this event is already in the wishlist
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchWishlistStatus = async () => {
+      if (!localStorage.getItem("token")) {
+        setWishlistSaved(false);
+        return;
+      }
+
+      try {
+        const response = await api.get("/wishlist");
+        const items = Array.isArray(response.data)
+          ? response.data
+          : [];
+
+        if (!cancelled) {
+          setWishlistSaved(
+            items.some(
+              (item) => Number(item.event_id) === Number(event_id)
+            )
+          );
+        }
+      } catch (error) {
+        console.error("Unable to load wishlist status:", error);
+      }
+    };
+
+    fetchWishlistStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [event_id]);
+
+  // Module 20: Add or remove an event from the wishlist
+  const handleWishlistToggle = async () => {
+    if (!localStorage.getItem("token")) {
+      alert("Please login to manage your wishlist.");
+      navigate("/login");
+      return;
+    }
+
+    try {
+      setWishlistLoading(true);
+
+      if (wishlistSaved) {
+        await api.delete(`/wishlist/${event_id}`);
+        setWishlistSaved(false);
+      } else {
+        await api.post("/wishlist", {
+          event_id: Number(event_id),
+        });
+        setWishlistSaved(true);
+      }
+    } catch (error) {
+      alert(
+        error.response?.data?.detail ||
+          "Unable to update your wishlist. Please try again."
+      );
+    } finally {
+      setWishlistLoading(false);
+    }
+  };
+
+  // Module 21: Fetch event updates and announcements
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchEventUpdates = async () => {
+      try {
+        const response = await api.get(
+          `/events/${event_id}/updates`
+        );
+
+        if (!cancelled) {
+          setEventUpdates(
+            Array.isArray(response.data) ? response.data : []
+          );
+          setUpdatesError("");
+        }
+      } catch (error) {
+        console.error("Unable to load event updates:", error);
+
+        if (!cancelled) {
+          setUpdatesError("Unable to load event updates.");
+        }
+      }
+    };
+
+    fetchEventUpdates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [event_id]);
+
   // Book tickets and proceed to payment
   const handleBooking = async () => {
     const token = localStorage.getItem("token");
@@ -93,15 +348,38 @@ function EventDetails() {
       return;
     }
 
+    if (availabilityLoading || availabilityError || !validAvailability) {
+      alert("Ticket availability is not confirmed. Please try again.");
+      return;
+    }
+
     if (!event || quantity < 1) {
       alert("Please select a valid ticket quantity.");
       return;
     }
 
+    const availableCount = Number(
+      availability?.available_tickets ??
+        availability?.available ??
+        availability?.tickets_available
+    );
+
+    if (quantity > availableCount) {
+      alert(
+        `Only ${availableCount} ticket(s) are currently available.`
+      );
+      return;
+    }
+
+    if (availableCount <= 0) {
+      alert("Sorry, this event is sold out.");
+      return;
+    }
+
     if (
-      event.event_status === "CANCELLED" ||
-      event.event_status === "COMPLETED" ||
-      event.event_status === "ONGOING"
+      ["CANCELLED", "COMPLETED", "ONGOING"].includes(
+        event.event_status
+      )
     ) {
       alert("Booking is unavailable for this event.");
       return;
@@ -175,11 +453,9 @@ function EventDetails() {
 
       if (editingReviewId !== null) {
         await api.put(`/reviews/${editingReviewId}`, reviewData);
-
         setReviewMessage("Your review was updated successfully.");
       } else {
         await api.post(`/events/${event_id}/reviews`, reviewData);
-
         setReviewMessage("Your review was submitted successfully.");
       }
 
@@ -265,10 +541,36 @@ function EventDetails() {
   const status = event.event_status || "UPCOMING";
   const statusClass = status.toLowerCase();
 
+  const availableValue =
+    availability?.available_tickets ??
+    availability?.available ??
+    availability?.tickets_available;
+
+  const availableCount =
+    availableValue === undefined || availableValue === null
+      ? null
+      : Number(availableValue);
+
+  const soldOut =
+    availableCount !== null &&
+    Number.isFinite(availableCount) &&
+    availableCount <= 0;
+
+  const validAvailability =
+    availableCount !== null &&
+    Number.isFinite(availableCount) &&
+    availableCount >= 0;
+
   const canBook =
-    status !== "CANCELLED" &&
-    status !== "ONGOING" &&
-    status !== "COMPLETED";
+    !availabilityLoading &&
+    !availabilityError &&
+    validAvailability &&
+    !soldOut &&
+    !["CANCELLED", "ONGOING", "COMPLETED"].includes(status);
+
+  const maxSelectableQuantity = validAvailability
+    ? Math.min(10, availableCount)
+    : 0;
 
   return (
     <div className="event-details">
@@ -276,7 +578,7 @@ function EventDetails() {
         type="button"
         className="back-button"
         onClick={() => navigate("/home")}
-      > 
+      >
         ← Back to Events
       </button>
 
@@ -334,9 +636,89 @@ function EventDetails() {
         {new Date(event.event_date).toLocaleString()}
       </p>
 
-      <p className="details-price">
-        ₹{event.ticket_price}
-      </p>
+      <p className="details-price">₹{event.ticket_price}</p>
+
+      {/* MODULE 18: LIVE TICKET AVAILABILITY */}
+      <section className="live-availability">
+        <h3>Live Ticket Availability</h3>
+
+        {availabilityLoading ? (
+          <p>Loading ticket availability...</p>
+        ) : availabilityError ? (
+          <p role="alert">{availabilityError}</p>
+        ) : validAvailability ? (
+          <>
+            <p>
+              Available tickets: <strong>{availableCount}</strong>
+            </p>
+
+            {soldOut && (
+              <p role="status">
+                Sold out — tickets are currently unavailable.
+              </p>
+            )}
+
+            {!soldOut && availableCount <= 10 && (
+              <p>Only {availableCount} ticket(s) left!</p>
+            )}
+          </>
+        ) : (
+          <p role="alert">Availability data is invalid.</p>
+        )}
+
+        <small>
+          Ticket availability updates live when bookings change.
+        </small>
+      </section>
+
+      {/* MODULE 20: WISHLIST */}
+      <div className="wishlist-action">
+        <button
+          type="button"
+          onClick={handleWishlistToggle}
+          disabled={wishlistLoading}
+        >
+          {wishlistLoading
+            ? "Updating Wishlist..."
+            : wishlistSaved
+            ? "♥ Remove from Wishlist"
+            : "♡ Add to Wishlist"}
+        </button>
+      </div>
+
+      {/* MODULE 21: EVENT UPDATES */}
+      <section className="event-updates">
+        <h2>Live Event Updates</h2>
+
+        {updatesError ? (
+          <p>{updatesError}</p>
+        ) : eventUpdates.length === 0 ? (
+          <p>No announcements have been posted for this event yet.</p>
+        ) : (
+          eventUpdates.map((update) => (
+            <article
+              key={update.id}
+              className={
+                update.is_important
+                  ? "event-update important-update"
+                  : "event-update"
+              }
+            >
+              {update.is_important && (
+                <strong>📢 Important Announcement</strong>
+              )}
+
+              <p>{update.message}</p>
+
+              <small>
+                {update.created_at
+                  ? new Date(update.created_at).toLocaleString()
+                  : ""}
+              </small>
+            </article>
+          ))
+        )}
+      </section>
 
       {/* Ticket booking */}
       {canBook ? (
@@ -351,14 +733,16 @@ function EventDetails() {
             id="ticket-quantity"
             value={quantity}
             onChange={(e) => setQuantity(Number(e.target.value))}
-            disabled={bookingLoading}
+            disabled={bookingLoading || availabilityLoading || !canBook}
           >
-            {Array.from({ length: 10 }, (_, index) => (
-              <option key={index + 1} value={index + 1}>
-                {index + 1}{" "}
-                {index === 0 ? "Ticket" : "Tickets"}
-              </option>
-            ))}
+            {Array.from(
+              { length: maxSelectableQuantity },
+              (_, index) => (
+                <option key={index + 1} value={index + 1}>
+                  {index + 1} {index === 0 ? "Ticket" : "Tickets"}
+                </option>
+              )
+            )}
           </select>
 
           <p>
@@ -366,17 +750,23 @@ function EventDetails() {
             ₹{Number(event.ticket_price * quantity).toFixed(2)}
           </p>
 
-          
           <button
             type="button"
             className="book-button"
             onClick={handleBooking}
-            disabled={bookingLoading || !canBook}
+            disabled={
+              bookingLoading ||
+              !canBook ||
+              quantity > availableCount
+            }
             aria-busy={bookingLoading}
           >
             {bookingLoading ? (
               <>
-                <span className="booking-spinner" aria-hidden="true"></span>
+                <span
+                  className="booking-spinner"
+                  aria-hidden="true"
+                ></span>
                 Creating Booking...
               </>
             ) : (
@@ -386,7 +776,6 @@ function EventDetails() {
               </>
             )}
           </button>
-
         </div>
       ) : (
         <p className="event-info-notice">
@@ -400,9 +789,7 @@ function EventDetails() {
 
         {/* Average rating */}
         <div className="rating-summary">
-          <h3>
-            ⭐ {Number(averageRating).toFixed(1)} / 5
-          </h3>
+          <h3>⭐ {Number(averageRating).toFixed(1)} / 5</h3>
 
           <p>
             Based on {totalReviews}{" "}
@@ -411,10 +798,7 @@ function EventDetails() {
         </div>
 
         {/* Review submission and editing form */}
-        <form
-          className="review-form"
-          onSubmit={handleReviewSubmit}
-        >
+        <form className="review-form" onSubmit={handleReviewSubmit}>
           <h3>
             {editingReviewId !== null
               ? "Edit Your Review"
@@ -501,15 +885,11 @@ function EventDetails() {
             </p>
           ) : (
             reviews.map((review) => {
-              // Convert both IDs to numbers before comparing.
               const isOwnReview =
                 Number(review.user_id) === currentUserId;
 
               return (
-                <article
-                  className="review-card"
-                  key={review.id}
-                >
+                <article className="review-card" key={review.id}>
                   <div className="review-card-header">
                     <strong>
                       {isOwnReview
@@ -519,9 +899,7 @@ function EventDetails() {
 
                     <span className="review-stars">
                       {"★".repeat(Number(review.rating))}
-                      {"☆".repeat(
-                        5 - Number(review.rating)
-                      )}
+                      {"☆".repeat(5 - Number(review.rating))}
                     </span>
                   </div>
 
@@ -531,9 +909,7 @@ function EventDetails() {
                   </p>
 
                   <small>
-                    {new Date(
-                      review.created_at
-                    ).toLocaleString()}
+                    {new Date(review.created_at).toLocaleString()}
                   </small>
 
                   {/* Only show actions for the review owner */}
@@ -548,9 +924,7 @@ function EventDetails() {
 
                       <button
                         type="button"
-                        onClick={() =>
-                          handleDeleteReview(review.id)
-                        }
+                        onClick={() => handleDeleteReview(review.id)}
                       >
                         Delete
                       </button>
